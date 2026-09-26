@@ -4,7 +4,53 @@ EvidenceForge is a local-first workbench for drafting security questionnaire res
 
 **evidence first → grounded draft → citations → human review → export**
 
-The project is currently in **Phase 0: discovery and architecture documentation**. No application code is implemented by this documentation pass. The documents describe a proposed MVP, its security boundaries, evaluation approach, and unresolved decisions. Performance, security, and quality values in these documents are targets or hypotheses until measured.
+The project has completed Phase 0 documentation and is now in **Phase 1A: application skeleton**. The current implementation establishes the API, web, database, migration, configuration, testing, and local Docker boundaries only. No evidence ingestion, retrieval, authentication, authorization, questionnaire processing, or LLM functionality is implemented. Performance, security, and quality values in the documentation remain targets or hypotheses until measured.
+
+## Phase 1A status
+
+The skeleton includes:
+
+- a FastAPI backend with liveness and database readiness endpoints;
+- a Next.js and TypeScript frontend with a deliberately small status page;
+- PostgreSQL configuration through SQLAlchemy and `psycopg`;
+- Alembic migration configuration with an intentionally empty initial revision;
+- Docker Compose services for PostgreSQL, the API, and the web process;
+- environment-based configuration with `.env` ignored and `.env.example` committed;
+- backend pytest tests plus Ruff and mypy configuration; and
+- frontend ESLint, Prettier, and TypeScript configuration.
+
+The empty initial migration is deliberate: Phase 1A establishes the migration mechanism without inventing domain tables before the evidence and questionnaire contracts are validated.
+
+## Local development
+
+Prerequisite: Python 3.11+, Node.js 20+, npm, and Docker Compose.
+
+One-time setup:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Start the local environment:
+
+```powershell
+docker compose up --build
+```
+
+The API is available at `http://localhost:8000`, with liveness at `/health/live` and database readiness at `/health/ready`. The web skeleton is available at `http://localhost:3000`. The API container runs `alembic upgrade head` before starting Uvicorn.
+
+Useful local checks, outside Docker:
+
+```text
+python -m pip install -e "backend[dev]"
+python -m pytest backend/tests
+ruff check backend/app backend/tests backend/migrations
+ruff format --check backend/app backend/tests backend/migrations
+mypy backend/app
+cd frontend; npm ci; npm run lint; npm run typecheck; npm run format:check
+```
+
+These commands test and check only the functionality currently implemented; they do not imply application security or production readiness.
 
 ## Problem
 
