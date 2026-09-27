@@ -32,3 +32,5 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+*.egg-info/

@@ -4,7 +4,20 @@ EvidenceForge is a local-first workbench for drafting security questionnaire res
 
 **evidence first → grounded draft → citations → human review → export**
 
-The project has completed Phase 0 documentation and is now in **Phase 1A: application skeleton**. The current implementation establishes the API, web, database, migration, configuration, testing, and local Docker boundaries only. No evidence ingestion, retrieval, authentication, authorization, questionnaire processing, or LLM functionality is implemented. Performance, security, and quality values in the documentation remain targets or hypotheses until measured.
+The project has completed Phase 0 documentation and is now in **Phase 1B: security boundary**. Phase 1A established the API, web, database, migration, configuration, testing, and local Docker boundaries. Phase 1B adds the server-side workspace, membership, role, opaque-token authentication, authorization, isolation, IDOR protections, and audit-event boundary. Evidence ingestion, retrieval, questionnaire processing, and LLM functionality remain unimplemented. Performance, security, and quality values in the documentation remain targets or hypotheses until measured.
+
+## Phase 1B status
+
+The implementation includes:
+
+- workspace and membership persistence with owner, admin, member, and viewer roles;
+- database-backed opaque bearer-token authentication with token expiry and revocation checks;
+- server-side workspace authorization derived from authenticated memberships;
+- protected workspace, membership, and audit-event routes with IDOR and cross-workspace isolation checks;
+- immutable-in-practice audit event records for security-sensitive operations and denied access attempts; and
+- unit, integration, migration, and security tests covering authentication, role boundaries, IDOR, and cross-workspace access.
+
+Bearer tokens are intentionally provisioned outside the public API. A deployment-specific identity/token provisioning mechanism must create users and token records before protected routes can be used. The Phase 1B API does not add self-service registration or token issuance.
 
 ## Phase 1A status
 
