@@ -112,6 +112,7 @@ class EvidenceDocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
 class EvidenceVersionIngestionResponse(BaseModel):
     """Result of uploading and persisting one evidence version."""
 
@@ -121,3 +122,42 @@ class EvidenceVersionIngestionResponse(BaseModel):
     version_number: int
     chunk_count: int
     ingestion_attempt_id: uuid.UUID
+
+
+class EvidenceDocumentVersionResponse(BaseModel):
+    """Metadata for an immutable evidence document version."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    version_number: int
+    normalized_sha256: str
+    raw_sha256: str
+    normalization_version: str
+    original_filename: str
+    media_type: str
+    raw_size_bytes: int
+    normalized_size_bytes: int
+    chunking_version: str
+    chunk_target_bytes: int
+    chunk_overlap_bytes: int
+    created_by_user_id: uuid.UUID
+    created_at: datetime
+
+
+class EvidenceChunkResponse(BaseModel):
+    """One immutable evidence retrieval chunk."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_version_id: uuid.UUID
+    chunk_index: int
+    content: str
+    content_hash: str
+    normalized_start_byte: int
+    normalized_end_byte: int
+    section_label: str | None
+    page_number: int | None
+    created_at: datetime

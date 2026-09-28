@@ -11,8 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    EvidenceChunkResponse,
     EvidenceDocumentCreate,
     EvidenceDocumentResponse,
+    EvidenceDocumentVersionResponse,
     EvidenceVersionIngestionResponse,
 )
 from app.audit import record_audit_event
@@ -35,7 +37,12 @@ from app.evidence.persistence.ingestion_service import (
     IngestionOutcome,
     persist_ingestion,
 )
-from app.models import EvidenceDocument, WorkspaceRole
+from app.evidence.persistence.repositories import (
+    get_document_version,
+    list_document_versions,
+    list_version_chunks,
+)
+from app.models import EvidenceChunk, EvidenceDocument, EvidenceDocumentVersion, WorkspaceRole
 
 router = APIRouter(prefix="/workspaces", tags=["evidence"])
 
@@ -54,7 +61,10 @@ def _ingestion_http_error(exc: IngestionValidationError) -> HTTPException:
             detail="Evidence file exceeds the maximum permitted size",
         )
 
-    if isinstance(exc, (UnsupportedExtensionError, UnsupportedMediaTypeError)):
+    if isinstance(
+        exc,
+        (UnsupportedExtensionError, UnsupportedMediaTypeError),
+    ):
         return HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Evidence file type is not supported",
@@ -256,9 +266,6 @@ def upload_evidence_version(
             ingestion_result=ingestion_result,
         )
 
-    except (FileTooLargeError, UnsupportedExtensionError, UnsupportedMediaTypeError) as exc:
-        raise _ingestion_http_error(exc) from exc
-
     except IngestionValidationError as exc:
         raise _ingestion_http_error(exc) from exc
 
@@ -270,7 +277,7 @@ def upload_evidence_version(
 
     except EvidencePersistenceValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Evidence persistence validation failed",
         ) from exc
 
@@ -293,3 +300,121 @@ def upload_evidence_version(
         chunk_count=persistence_result.chunk_count,
         ingestion_attempt_id=persistence_result.ingestion_attempt_id,
     )
+
+
+@router.get(
+    "/{workspace_id}/documents/{document_id}/versions",
+    response_model=list[EvidenceDocumentVersionResponse],
+)
+def list_evidence_versions(
+    document_id: uuid.UUID,
+    context: WorkspaceAccess,
+    db: DbSession,
+) -> list[EvidenceDocumentVersion]:
+    """List immutable versions for an evidence document."""
+
+    versions = list_document_versions(
+        db,
+        workspace_id=context.workspace.id,
+        document_id=document_id,
+    )
+
+    if versions is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evidence document not found",
+        )
+
+    record_audit_event(
+        db,
+        actor_user_id=context.user.id,
+        workspace_id=context.workspace.id,
+        action="evidence.version.listed",
+        resource_type="evidence_document",
+        resource_id=str(document_id),
+        metadata={"count": len(versions)},
+    )
+
+    db.commit()
+    return versions
+
+
+@router.get(
+    "/{workspace_id}/documents/{document_id}/versions/{version_id}",
+    response_model=EvidenceDocumentVersionResponse,
+)
+def get_evidence_version(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    context: WorkspaceAccess,
+    db: DbSession,
+) -> EvidenceDocumentVersion:
+    """Return one immutable evidence version."""
+
+    version = get_document_version(
+        db,
+        workspace_id=context.workspace.id,
+        document_id=document_id,
+        version_id=version_id,
+    )
+
+    if version is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evidence version not found",
+        )
+
+    record_audit_event(
+        db,
+        actor_user_id=context.user.id,
+        workspace_id=context.workspace.id,
+        action="evidence.version.read",
+        resource_type="evidence_document_version",
+        resource_id=str(version.id),
+        metadata={
+            "document_id": str(document_id),
+            "version_number": version.version_number,
+        },
+    )
+
+    db.commit()
+    return version
+
+
+@router.get(
+    "/{workspace_id}/documents/{document_id}/versions/{version_id}/chunks",
+    response_model=list[EvidenceChunkResponse],
+)
+def list_evidence_chunks(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    context: WorkspaceAccess,
+    db: DbSession,
+) -> list[EvidenceChunk]:
+    """Return deterministic retrieval chunks for one evidence version."""
+
+    chunks = list_version_chunks(
+        db,
+        workspace_id=context.workspace.id,
+        document_id=document_id,
+        version_id=version_id,
+    )
+
+    if chunks is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evidence version not found",
+        )
+
+    record_audit_event(
+        db,
+        actor_user_id=context.user.id,
+        workspace_id=context.workspace.id,
+        action="evidence.chunk.listed",
+        resource_type="evidence_document_version",
+        resource_id=str(version_id),
+        metadata={"count": len(chunks)},
+    )
+
+    db.commit()
+    return list(chunks)
