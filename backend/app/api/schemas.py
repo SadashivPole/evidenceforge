@@ -1,12 +1,13 @@
-"""Pydantic contracts for the Phase 1B security-boundary API."""
+"""Pydantic contracts for the EvidenceForge API."""
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import WorkspaceRole
 
@@ -74,3 +75,39 @@ class AuditEventResponse(BaseModel):
     resource_id: str | None
     event_metadata: dict[str, Any]
     created_at: datetime
+
+
+class EvidenceDocumentCreate(BaseModel):
+    """Payload for creating a workspace-scoped evidence document."""
+
+    name: str = Field(min_length=1, max_length=255)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        """Reject blank or control-character document names."""
+
+        normalized = value.strip()
+
+        if not normalized:
+            raise ValueError("Document name cannot be blank")
+
+        if any(unicodedata.category(character) == "Cc" for character in normalized):
+            raise ValueError("Document name contains control characters")
+
+        return normalized
+
+
+class EvidenceDocumentResponse(BaseModel):
+    """Workspace-scoped evidence document metadata."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    name: str
+    source_type: str
+    status: str
+    created_by_user_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
