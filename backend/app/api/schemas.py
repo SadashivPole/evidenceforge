@@ -162,15 +162,21 @@ class EvidenceChunkResponse(BaseModel):
     page_number: int | None
     created_at: datetime
 
+
 class QuestionnaireQuestionResponse(BaseModel):
     """One normalized questionnaire question returned by import preview."""
 
     question_id: str
+    identity_kind: str
+    source_question_id: str | None
     ordinal: int
     sheet_name: str
+    normalized_sheet_name: str
     source_row: int
     question_text: str
+    normalized_question_text: str
     section_path: list[str]
+    normalized_section_path: list[str]
 
 
 class QuestionnaireImportedSheetResponse(BaseModel):
@@ -198,6 +204,10 @@ class QuestionnaireImportResponse(BaseModel):
     source_filename: str
     status: str
     parser_version: str
+    normalization_version: str
+    question_identity_version: str
+    hash_version: str
+    normalized_questionnaire_sha256: str
     questions: list[QuestionnaireQuestionResponse]
     imported_sheets: list[QuestionnaireImportedSheetResponse]
     ignored_sheets: list[QuestionnaireIgnoredSheetResponse]

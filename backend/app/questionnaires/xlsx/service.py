@@ -8,12 +8,20 @@ from zipfile import BadZipFile
 
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+from openpyxl.worksheet.worksheet import Worksheet
 
 from app.questionnaires.normalization import normalize_filename, normalize_text
-from app.questionnaires.service import build_question, build_questionnaire
+from app.questionnaires.service import (
+    build_question,
+    build_questionnaire,
+    normalize_source_question_id,
+)
 from app.questionnaires.xlsx.errors import (
     AmbiguousQuestionColumnError,
+    AmbiguousSourceQuestionIdColumnError,
+    DuplicateSourceQuestionIdError,
     InvalidQuestionValueError,
+    InvalidSourceQuestionIdError,
     InvalidXlsxWorkbookError,
     NoQuestionColumnError,
     TooManyQuestionsError,
@@ -24,6 +32,7 @@ from app.questionnaires.xlsx.errors import (
 from app.questionnaires.xlsx.policy import (
     QUESTION_HEADERS,
     SECTION_HEADERS,
+    SOURCE_QUESTION_ID_HEADERS,
     XLSX_IMPORT_VERSION,
     XlsxImportPolicy,
 )
@@ -55,6 +64,17 @@ def _cell_text(value: object) -> str | None:
         return None
 
     return normalized
+
+
+def _source_question_id_value(value: object) -> str | None:
+    """Read an explicit source ID without normalizing its whitespace first."""
+
+    if value is None:
+        return None
+
+    text = str(value)
+
+    return text if text else None
 
 
 def _validate_filename(filename: str) -> None:
@@ -151,11 +171,7 @@ def _find_question_header(
 
     earliest_row = min(rows)
 
-    earliest_matches = [
-        match
-        for match in matches
-        if match[0] == earliest_row
-    ]
+    earliest_matches = [match for match in matches if match[0] == earliest_row]
 
     if len(earliest_matches) > 1:
         raise AmbiguousQuestionColumnError(
@@ -198,6 +214,38 @@ def _find_section_header(
     return column_number, original
 
 
+def _find_source_question_id_header(
+    *,
+    worksheet: Worksheet,
+    header_row: int,
+    policy: XlsxImportPolicy,
+) -> tuple[int, str] | None:
+    """Find one explicitly supported source-question-ID header."""
+
+    matches = [
+        match
+        for match in _find_headers(
+            worksheet=worksheet,
+            allowed_headers=SOURCE_QUESTION_ID_HEADERS,
+            max_scan_rows=policy.max_header_scan_rows,
+        )
+        if match[0] == header_row
+    ]
+
+    if not matches:
+        return None
+
+    if len(matches) > 1:
+        raise AmbiguousSourceQuestionIdColumnError(
+            f"worksheet {worksheet.title!r} contains multiple source question ID headers "
+            f"on row {header_row}"
+        )
+
+    _, column_number, original = matches[0]
+
+    return column_number, original
+
+
 def _questionnaire_name_from_filename(filename: str) -> str:
     """Derive a deterministic display name from the workbook filename."""
 
@@ -227,8 +275,7 @@ def import_xlsx(
 
     if len(data) > active_policy.max_file_size_bytes:
         raise XlsxFileTooLargeError(
-            f"questionnaire exceeds maximum size of "
-            f"{active_policy.max_file_size_bytes} bytes"
+            f"questionnaire exceeds maximum size of {active_policy.max_file_size_bytes} bytes"
         )
 
     if not data:
@@ -248,9 +295,7 @@ def import_xlsx(
         ValueError,
         KeyError,
     ) as exc:
-        raise InvalidXlsxWorkbookError(
-            "questionnaire is not a valid XLSX workbook"
-        ) from exc
+        raise InvalidXlsxWorkbookError("questionnaire is not a valid XLSX workbook") from exc
 
     try:
         sheet_names = tuple(workbook.sheetnames)
@@ -264,6 +309,8 @@ def import_xlsx(
         questions = []
         imported_sheets: list[ImportedSheet] = []
         ignored_sheets: list[IgnoredSheet] = []
+        seen_source_question_ids: set[str] = set()
+        fallback_occurrences: dict[tuple[str, tuple[str, ...], str], int] = {}
 
         for worksheet in workbook.worksheets:
             question_header = _find_question_header(
@@ -287,12 +334,21 @@ def import_xlsx(
                 header_row=header_row,
                 policy=active_policy,
             )
+            source_id_header = _find_source_question_id_header(
+                worksheet=worksheet,
+                header_row=header_row,
+                policy=active_policy,
+            )
 
             section_column: int | None = None
             section_header_text: str | None = None
+            source_id_column: int | None = None
 
             if section_header is not None:
                 section_column, section_header_text = section_header
+
+            if source_id_header is not None:
+                source_id_column, _ = source_id_header
 
             current_section: tuple[str, ...] = ()
             sheet_question_count = 0
@@ -304,18 +360,10 @@ def import_xlsx(
                 ),
                 start=header_row + 1,
             ):
-                question_value = (
-                    row[question_column - 1]
-                    if question_column <= len(row)
-                    else None
-                )
+                question_value = row[question_column - 1] if question_column <= len(row) else None
 
                 if section_column is not None:
-                    section_value = (
-                        row[section_column - 1]
-                        if section_column <= len(row)
-                        else None
-                    )
+                    section_value = row[section_column - 1] if section_column <= len(row) else None
 
                     normalized_section = _cell_text(section_value)
 
@@ -341,18 +389,53 @@ def import_xlsx(
 
                 if len(questions) >= active_policy.max_questions:
                     raise TooManyQuestionsError(
-                        f"workbook contains more than "
-                        f"{active_policy.max_questions} questions"
+                        f"workbook contains more than {active_policy.max_questions} questions"
                     )
+
+                source_question_id: str | None = None
+
+                if source_id_column is not None:
+                    source_id_value = (
+                        row[source_id_column - 1] if source_id_column <= len(row) else None
+                    )
+                    raw_source_question_id = _source_question_id_value(source_id_value)
+
+                    if raw_source_question_id is not None:
+                        try:
+                            source_question_id = normalize_source_question_id(
+                                raw_source_question_id
+                            )
+                        except ValueError as exc:
+                            raise InvalidSourceQuestionIdError(str(exc)) from exc
+
+                        if source_question_id in seen_source_question_ids:
+                            raise DuplicateSourceQuestionIdError(
+                                f"duplicate source question ID {source_question_id!r} in workbook"
+                            )
+                        seen_source_question_ids.add(source_question_id)
+
+                normalized_sheet_name = normalize_text(worksheet.title)
+                duplicate_occurrence = 0
+
+                if source_question_id is None:
+                    fallback_key = (
+                        normalized_sheet_name,
+                        current_section,
+                        normalized_question,
+                    )
+                    duplicate_occurrence = fallback_occurrences.get(fallback_key, 0)
+                    fallback_occurrences[fallback_key] = duplicate_occurrence + 1
 
                 ordinal = len(questions) + 1
 
                 question = build_question(
                     ordinal=ordinal,
-                    sheet_name=worksheet.title,
+                    sheet_name=normalized_sheet_name,
                     source_row=source_row,
                     question_text=normalized_question,
                     section_path=current_section,
+                    source_question_id=source_question_id,
+                    duplicate_occurrence=duplicate_occurrence,
                 )
 
                 questions.append(question)
@@ -369,9 +452,7 @@ def import_xlsx(
             )
 
         if not imported_sheets:
-            raise NoQuestionColumnError(
-                "no worksheet contains a supported question header"
-            )
+            raise NoQuestionColumnError("no worksheet contains a supported question header")
 
         if not questions:
             raise NoQuestionColumnError(

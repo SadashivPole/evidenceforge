@@ -30,7 +30,7 @@ def test_question_id_is_deterministic() -> None:
     assert first == second
 
 
-def test_question_id_changes_when_source_row_changes() -> None:
+def test_question_id_does_not_change_when_source_row_changes() -> None:
     first = generate_question_id(
         sheet_name="Security",
         source_row=12,
@@ -45,7 +45,7 @@ def test_question_id_changes_when_source_row_changes() -> None:
         section_path=("Security Governance",),
     )
 
-    assert first != second
+    assert first == second
 
 
 def test_build_question_normalizes_text() -> None:

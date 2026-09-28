@@ -1,11 +1,17 @@
-"""Validation policy for EvidenceForge questionnaires."""
+"""Versioned policy for deterministic questionnaire imports."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 QUESTIONNAIRE_VERSION = "questionnaire-v1"
-QUESTION_ID_VERSION = "question-id-v1"
+XLSX_IMPORT_VERSION = "xlsx-import-v1"
+QUESTION_NORMALIZATION_VERSION = "question-normalization-v1"
+QUESTION_IDENTITY_VERSION = "question-identity-v2"
+QUESTIONNAIRE_HASH_VERSION = "questionnaire-hash-v1"
+
+# Backward-compatible name retained for callers of the pre-1J-D policy.
+QUESTION_ID_VERSION = QUESTION_IDENTITY_VERSION
 
 SUPPORTED_EXTENSIONS = frozenset({".xlsx"})
 
@@ -18,6 +24,7 @@ MAX_QUESTION_LENGTH = 4000
 
 MAX_SECTION_LENGTH = 500
 MAX_SHEET_NAME_LENGTH = 255
+MAX_SOURCE_QUESTION_ID_LENGTH = 255
 
 
 @dataclass(frozen=True, slots=True)

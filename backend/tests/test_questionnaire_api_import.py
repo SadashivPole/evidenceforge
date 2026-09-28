@@ -47,6 +47,20 @@ def make_workbook_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def make_invalid_source_id_workbook_bytes() -> bytes:
+    """Create a workbook with an over-length explicit source question ID."""
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Security"
+    worksheet.append(["Question ID", "Question"])
+    worksheet.append(["Q" * 256, "Do you use MFA?"])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def test_questionnaire_xlsx_import_preview(
     client: TestClient,
     db_session: Session,
@@ -82,6 +96,10 @@ def test_questionnaire_xlsx_import_preview(
     assert body["source_filename"] == "vendor-questionnaire.xlsx"
     assert body["status"] == "IMPORTED"
     assert body["parser_version"] == "xlsx-import-v1"
+    assert body["normalization_version"] == "question-normalization-v1"
+    assert body["question_identity_version"] == "question-identity-v2"
+    assert body["hash_version"] == "questionnaire-hash-v1"
+    assert len(body["normalized_questionnaire_sha256"]) == 64
 
     assert len(body["questions"]) == 2
 
@@ -90,10 +108,13 @@ def test_questionnaire_xlsx_import_preview(
     assert first["ordinal"] == 1
     assert first["sheet_name"] == "Security"
     assert first["source_row"] == 2
-    assert first["question_text"] == (
-        "Do you enforce multi-factor authentication?"
-    )
+    assert first["question_text"] == ("Do you enforce multi-factor authentication?")
+    assert first["identity_kind"] == "fallback"
+    assert first["source_question_id"] is None
+    assert first["normalized_sheet_name"] == "Security"
+    assert first["normalized_question_text"] == ("Do you enforce multi-factor authentication?")
     assert first["section_path"] == ["Access Control"]
+    assert first["normalized_section_path"] == ["Access Control"]
 
     second = body["questions"][1]
 
@@ -107,6 +128,36 @@ def test_questionnaire_xlsx_import_preview(
 
     assert len(body["ignored_sheets"]) == 1
     assert body["ignored_sheets"][0]["sheet_name"] == "Instructions"
+
+
+def test_invalid_source_question_id_returns_422(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    principal = create_principal(
+        db_session,
+        email="invalid-source-id@example.com",
+        display_name="Invalid Source ID",
+    )
+    workspace = create_workspace_with_owner(
+        db_session,
+        principal,
+        name="Invalid Source ID Workspace",
+    )
+
+    response = client.post(
+        f"/workspaces/{workspace.id}/questionnaires/import",
+        headers=auth_headers(principal),
+        files={
+            "file": (
+                "questionnaire.xlsx",
+                make_invalid_source_id_workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_question_ids_are_stable_across_repeated_api_imports(
@@ -154,15 +205,9 @@ def test_question_ids_are_stable_across_repeated_api_imports(
     assert first.status_code == 200
     assert second.status_code == 200
 
-    first_ids = [
-        question["question_id"]
-        for question in first.json()["questions"]
-    ]
+    first_ids = [question["question_id"] for question in first.json()["questions"]]
 
-    second_ids = [
-        question["question_id"]
-        for question in second.json()["questions"]
-    ]
+    second_ids = [question["question_id"] for question in second.json()["questions"]]
 
     assert first_ids == second_ids
 

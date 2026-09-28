@@ -17,7 +17,7 @@ from app.questionnaires.xlsx.errors import (
     XlsxFileTooLargeError,
     XlsxImportError,
 )
-from app.questionnaires.xlsx.policy import XLSX_IMPORT_VERSION, XlsxImportPolicy
+from app.questionnaires.xlsx.policy import XlsxImportPolicy
 from app.questionnaires.xlsx.service import import_xlsx
 
 router = APIRouter(prefix="/workspaces", tags=["questionnaires"])
@@ -102,7 +102,13 @@ def import_questionnaire(
             "question_count": len(result.questionnaire.questions),
             "imported_sheet_count": len(result.imported_sheets),
             "ignored_sheet_count": len(result.ignored_sheets),
-            "parser_version": XLSX_IMPORT_VERSION,
+            "parser_version": result.questionnaire.parser_version,
+            "normalization_version": result.questionnaire.normalization_version,
+            "question_identity_version": result.questionnaire.question_identity_version,
+            "hash_version": result.questionnaire.hash_version,
+            "normalized_questionnaire_sha256": (
+                result.questionnaire.normalized_questionnaire_sha256
+            ),
         },
     )
     db.commit()
@@ -112,15 +118,24 @@ def import_questionnaire(
         name=result.questionnaire.name,
         source_filename=result.questionnaire.source_filename,
         status=result.questionnaire.status.value,
-        parser_version=XLSX_IMPORT_VERSION,
+        parser_version=result.questionnaire.parser_version,
+        normalization_version=result.questionnaire.normalization_version,
+        question_identity_version=result.questionnaire.question_identity_version,
+        hash_version=result.questionnaire.hash_version,
+        normalized_questionnaire_sha256=(result.questionnaire.normalized_questionnaire_sha256),
         questions=[
             {
                 "question_id": question.question_id,
+                "identity_kind": question.identity_kind,
+                "source_question_id": question.source_question_id,
                 "ordinal": question.ordinal,
                 "sheet_name": question.sheet_name,
+                "normalized_sheet_name": question.normalized_sheet_name,
                 "source_row": question.source_row,
                 "question_text": question.question_text,
+                "normalized_question_text": question.normalized_question_text,
                 "section_path": list(question.section_path),
+                "normalized_section_path": list(question.normalized_section_path),
             }
             for question in result.questionnaire.questions
         ],
