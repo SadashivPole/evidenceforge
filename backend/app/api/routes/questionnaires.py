@@ -8,10 +8,15 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.schemas import QuestionnaireImportResponse
-from app.audit import record_audit_event
 from app.auth import WorkspaceContext, assert_workspace_role, get_workspace_context
 from app.db import get_db
 from app.models import WorkspaceRole
+from app.questionnaires.persistence.errors import (
+    QuestionnaireNotFoundError,
+    QuestionnairePersistenceError,
+    QuestionnairePersistenceValidationError,
+)
+from app.questionnaires.persistence.service import persist_import
 from app.questionnaires.xlsx.errors import (
     UnsupportedXlsxExtensionError,
     XlsxFileTooLargeError,
@@ -49,6 +54,27 @@ def _import_http_error(exc: XlsxImportError) -> HTTPException:
     )
 
 
+def _persistence_http_error(exc: QuestionnairePersistenceError) -> HTTPException:
+    """Map persistence failures to safe HTTP responses."""
+
+    if isinstance(exc, QuestionnairePersistenceValidationError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Questionnaire import failed persistence validation",
+        )
+
+    if isinstance(exc, QuestionnaireNotFoundError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Questionnaire could not be resolved",
+        )
+
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Questionnaire persistence failed",
+    )
+
+
 @router.post(
     "/{workspace_id}/questionnaires/import",
     response_model=QuestionnaireImportResponse,
@@ -59,7 +85,7 @@ def import_questionnaire(
     db: DbSession,
     file: Annotated[UploadFile, File(...)],
 ) -> QuestionnaireImportResponse:
-    """Parse an XLSX questionnaire without persisting or generating answers."""
+    """Parse and persist one deterministic XLSX questionnaire import."""
 
     assert_workspace_role(
         context,
@@ -89,32 +115,19 @@ def import_questionnaire(
     except XlsxImportError as exc:
         raise _import_http_error(exc) from exc
 
-    record_audit_event(
-        db,
-        actor_user_id=context.user.id,
-        workspace_id=context.workspace.id,
-        action="questionnaire.import.previewed",
-        resource_type="questionnaire",
-        resource_id=str(result.questionnaire.questionnaire_id),
-        metadata={
-            "filename": filename,
-            "questionnaire_name": result.questionnaire.name,
-            "question_count": len(result.questionnaire.questions),
-            "imported_sheet_count": len(result.imported_sheets),
-            "ignored_sheet_count": len(result.ignored_sheets),
-            "parser_version": result.questionnaire.parser_version,
-            "normalization_version": result.questionnaire.normalization_version,
-            "question_identity_version": result.questionnaire.question_identity_version,
-            "hash_version": result.questionnaire.hash_version,
-            "normalized_questionnaire_sha256": (
-                result.questionnaire.normalized_questionnaire_sha256
-            ),
-        },
-    )
-    db.commit()
+    try:
+        persistence_result = persist_import(
+            db,
+            workspace_id=context.workspace.id,
+            actor_user_id=context.user.id,
+            import_result=result,
+            raw_data=raw_bytes,
+        )
+    except QuestionnairePersistenceError as exc:
+        raise _persistence_http_error(exc) from exc
 
     return QuestionnaireImportResponse(
-        questionnaire_id=result.questionnaire.questionnaire_id,
+        questionnaire_id=persistence_result.questionnaire_id,
         name=result.questionnaire.name,
         source_filename=result.questionnaire.source_filename,
         status=result.questionnaire.status.value,
@@ -122,7 +135,13 @@ def import_questionnaire(
         normalization_version=result.questionnaire.normalization_version,
         question_identity_version=result.questionnaire.question_identity_version,
         hash_version=result.questionnaire.hash_version,
-        normalized_questionnaire_sha256=(result.questionnaire.normalized_questionnaire_sha256),
+        normalized_questionnaire_sha256=(
+            result.questionnaire.normalized_questionnaire_sha256
+        ),
+        outcome=persistence_result.outcome,
+        version_id=persistence_result.version_id,
+        version_number=persistence_result.version_number,
+        import_attempt_id=persistence_result.import_attempt_id,
         questions=[
             {
                 "question_id": question.question_id,

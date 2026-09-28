@@ -197,7 +197,7 @@ class QuestionnaireIgnoredSheetResponse(BaseModel):
 
 
 class QuestionnaireImportResponse(BaseModel):
-    """Deterministic XLSX questionnaire import preview."""
+    """Deterministic XLSX questionnaire import persistence result."""
 
     questionnaire_id: uuid.UUID
     name: str
@@ -208,6 +208,10 @@ class QuestionnaireImportResponse(BaseModel):
     question_identity_version: str
     hash_version: str
     normalized_questionnaire_sha256: str
+    outcome: str
+    version_id: uuid.UUID
+    version_number: int
+    import_attempt_id: uuid.UUID
     questions: list[QuestionnaireQuestionResponse]
     imported_sheets: list[QuestionnaireImportedSheetResponse]
     ignored_sheets: list[QuestionnaireIgnoredSheetResponse]
