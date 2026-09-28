@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from app.api.routes.evidence import router as evidence_router
 from app.api.routes.health import router as health_router
 from app.api.routes.workspaces import router as workspaces_router
 from app.config import Settings, get_settings
@@ -22,6 +23,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.session_factory = create_session_factory(application.state.engine)
     application.include_router(health_router)
     application.include_router(workspaces_router)
+    application.include_router(evidence_router)
 
     @application.get("/", tags=["service"])
     def service_info() -> dict[str, str]:

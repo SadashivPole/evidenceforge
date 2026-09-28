@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     String,
@@ -134,6 +136,7 @@ class WorkspaceMembership(Base):
     """A user's role inside a workspace."""
 
     __tablename__ = "workspace_memberships"
+
     __table_args__ = (
         UniqueConstraint(
             "workspace_id",
@@ -223,6 +226,7 @@ class EvidenceDocument(Base):
     """Workspace-scoped source document."""
 
     __tablename__ = "evidence_documents"
+
     __table_args__ = (
         UniqueConstraint(
             "workspace_id",
@@ -274,11 +278,19 @@ class EvidenceDocumentVersion(Base):
     """Immutable version of an evidence document."""
 
     __tablename__ = "evidence_document_versions"
+
     __table_args__ = (
         UniqueConstraint(
             "document_id",
             "version_number",
             name="uq_evidence_document_versions_document_version",
+        ),
+        UniqueConstraint(
+            "document_id",
+            "normalized_sha256",
+            "normalization_version",
+            "chunking_version",
+            name="uq_evidence_document_versions_representation",
         ),
     )
 
@@ -293,17 +305,50 @@ class EvidenceDocumentVersion(Base):
         index=True,
     )
     version_number: Mapped[int] = mapped_column(nullable=False)
-    content_hash: Mapped[str] = mapped_column(
+
+    normalized_sha256: Mapped[str] = mapped_column(
         String(64),
         index=True,
+        nullable=False,
     )
+    raw_sha256: Mapped[str] = mapped_column(
+        String(64),
+        index=True,
+        nullable=False,
+    )
+    normalization_version: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
     original_filename: Mapped[str] = mapped_column(String(255))
     media_type: Mapped[str] = mapped_column(String(127))
-    byte_size: Mapped[int] = mapped_column(nullable=False)
+
+    raw_size_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    normalized_size_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
     extracted_text: Mapped[str] = mapped_column(
         Text,
         nullable=False,
     )
+
+    chunking_version: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    chunk_target_bytes: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+    chunk_overlap_bytes: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("users.id"),
@@ -320,11 +365,16 @@ class EvidenceChunk(Base):
     """Deterministic retrieval unit derived from an immutable document version."""
 
     __tablename__ = "evidence_chunks"
+
     __table_args__ = (
         UniqueConstraint(
             "document_version_id",
             "chunk_index",
             name="uq_evidence_chunks_version_index",
+        ),
+        CheckConstraint(
+            "normalized_end_byte > normalized_start_byte",
+            name="ck_evidence_chunks_valid_byte_range",
         ),
     )
 
@@ -349,6 +399,15 @@ class EvidenceChunk(Base):
     content_hash: Mapped[str] = mapped_column(
         String(64),
         index=True,
+        nullable=False,
+    )
+    normalized_start_byte: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    normalized_end_byte: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
     )
     section_label: Mapped[str | None] = mapped_column(
         String(255),
@@ -361,4 +420,85 @@ class EvidenceChunk(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+    )
+
+
+class EvidenceIngestionAttempt(Base):
+    """Immutable provenance record for an evidence ingestion attempt."""
+
+    __tablename__ = "evidence_ingestion_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        index=True,
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("evidence_documents.id", ondelete="CASCADE"),
+        index=True,
+    )
+    version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "evidence_document_versions.id",
+            ondelete="CASCADE",
+        ),
+        index=True,
+        nullable=True,
+    )
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    outcome: Mapped[str] = mapped_column(
+        String(32),
+        index=True,
+        nullable=False,
+    )
+    error_code: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+
+    original_filename: Mapped[str] = mapped_column(String(255))
+    media_type: Mapped[str] = mapped_column(String(127))
+
+    raw_sha256: Mapped[str] = mapped_column(
+        String(64),
+        index=True,
+        nullable=False,
+    )
+    normalized_sha256: Mapped[str] = mapped_column(
+        String(64),
+        index=True,
+        nullable=False,
+    )
+    normalization_version: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+
+    raw_size_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+    normalized_size_bytes: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
     )

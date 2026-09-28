@@ -1,12 +1,13 @@
-"""Pydantic contracts for the Phase 1B security-boundary API."""
+"""Pydantic contracts for the EvidenceForge API."""
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models import WorkspaceRole
 
@@ -73,4 +74,90 @@ class AuditEventResponse(BaseModel):
     resource_type: str
     resource_id: str | None
     event_metadata: dict[str, Any]
+    created_at: datetime
+
+
+class EvidenceDocumentCreate(BaseModel):
+    """Payload for creating a workspace-scoped evidence document."""
+
+    name: str = Field(min_length=1, max_length=255)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        """Reject blank or control-character document names."""
+
+        normalized = value.strip()
+
+        if not normalized:
+            raise ValueError("Document name cannot be blank")
+
+        if any(unicodedata.category(character) == "Cc" for character in normalized):
+            raise ValueError("Document name contains control characters")
+
+        return normalized
+
+
+class EvidenceDocumentResponse(BaseModel):
+    """Workspace-scoped evidence document metadata."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    name: str
+    source_type: str
+    status: str
+    created_by_user_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+class EvidenceVersionIngestionResponse(BaseModel):
+    """Result of uploading and persisting one evidence version."""
+
+    outcome: str
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_number: int
+    chunk_count: int
+    ingestion_attempt_id: uuid.UUID
+
+
+class EvidenceDocumentVersionResponse(BaseModel):
+    """Metadata for an immutable evidence document version."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    version_number: int
+    normalized_sha256: str
+    raw_sha256: str
+    normalization_version: str
+    original_filename: str
+    media_type: str
+    raw_size_bytes: int
+    normalized_size_bytes: int
+    chunking_version: str
+    chunk_target_bytes: int
+    chunk_overlap_bytes: int
+    created_by_user_id: uuid.UUID
+    created_at: datetime
+
+
+class EvidenceChunkResponse(BaseModel):
+    """One immutable evidence retrieval chunk."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_version_id: uuid.UUID
+    chunk_index: int
+    content: str
+    content_hash: str
+    normalized_start_byte: int
+    normalized_end_byte: int
+    section_label: str | None
+    page_number: int | None
     created_at: datetime
