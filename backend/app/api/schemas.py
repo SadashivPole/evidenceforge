@@ -111,3 +111,13 @@ class EvidenceDocumentResponse(BaseModel):
     created_by_user_id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+
+class EvidenceVersionIngestionResponse(BaseModel):
+    """Result of uploading and persisting one evidence version."""
+
+    outcome: str
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_number: int
+    chunk_count: int
+    ingestion_attempt_id: uuid.UUID

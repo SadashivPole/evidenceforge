@@ -1,25 +1,69 @@
-"""Workspace-scoped evidence document metadata routes."""
+"""Workspace-scoped evidence document and version routes."""
 
 from __future__ import annotations
 
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.schemas import EvidenceDocumentCreate, EvidenceDocumentResponse
+from app.api.schemas import (
+    EvidenceDocumentCreate,
+    EvidenceDocumentResponse,
+    EvidenceVersionIngestionResponse,
+)
 from app.audit import record_audit_event
 from app.auth import WorkspaceContext, assert_workspace_role, get_workspace_context
 from app.db import get_db
+from app.evidence.ingestion.errors import (
+    FileTooLargeError,
+    IngestionValidationError,
+    UnsupportedExtensionError,
+    UnsupportedMediaTypeError,
+)
+from app.evidence.ingestion.service import ingest
+from app.evidence.ingestion.types import IngestionInput
+from app.evidence.persistence.errors import (
+    EvidenceDocumentNotFoundError,
+    EvidencePersistenceError,
+    EvidencePersistenceValidationError,
+)
+from app.evidence.persistence.ingestion_service import (
+    IngestionOutcome,
+    persist_ingestion,
+)
 from app.models import EvidenceDocument, WorkspaceRole
 
 router = APIRouter(prefix="/workspaces", tags=["evidence"])
 
 DbSession = Annotated[Session, Depends(get_db)]
 WorkspaceAccess = Annotated[WorkspaceContext, Depends(get_workspace_context)]
+
+MAX_UPLOAD_READ_BYTES = 5 * 1024 * 1024 + 1
+
+
+def _ingestion_http_error(exc: IngestionValidationError) -> HTTPException:
+    """Map deterministic ingestion validation failures to safe HTTP responses."""
+
+    if isinstance(exc, FileTooLargeError):
+        return HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Evidence file exceeds the maximum permitted size",
+        )
+
+    if isinstance(exc, (UnsupportedExtensionError, UnsupportedMediaTypeError)):
+        return HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Evidence file type is not supported",
+        )
+
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="Evidence file failed deterministic validation",
+    )
 
 
 @router.post(
@@ -159,3 +203,93 @@ def get_evidence_document(
 
     db.commit()
     return document
+
+
+@router.post(
+    "/{workspace_id}/documents/{document_id}/versions",
+    response_model=EvidenceVersionIngestionResponse,
+)
+def upload_evidence_version(
+    document_id: uuid.UUID,
+    context: WorkspaceAccess,
+    response: Response,
+    db: DbSession,
+    file: Annotated[UploadFile, File(...)],
+) -> EvidenceVersionIngestionResponse:
+    """Upload, normalize, chunk, and persist one evidence document version."""
+
+    assert_workspace_role(
+        context,
+        db,
+        WorkspaceRole.OWNER,
+        WorkspaceRole.ADMIN,
+        WorkspaceRole.MEMBER,
+    )
+
+    filename = file.filename or ""
+    media_type = file.content_type
+
+    try:
+        raw_bytes = file.file.read(MAX_UPLOAD_READ_BYTES)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to read uploaded evidence file",
+        ) from exc
+    finally:
+        file.file.close()
+
+    try:
+        ingestion_result = ingest(
+            IngestionInput(
+                original_filename=filename,
+                media_type=media_type,
+                raw_bytes=raw_bytes,
+            )
+        )
+
+        persistence_result = persist_ingestion(
+            db,
+            workspace_id=context.workspace.id,
+            actor_user_id=context.user.id,
+            document_id=document_id,
+            ingestion_result=ingestion_result,
+        )
+
+    except (FileTooLargeError, UnsupportedExtensionError, UnsupportedMediaTypeError) as exc:
+        raise _ingestion_http_error(exc) from exc
+
+    except IngestionValidationError as exc:
+        raise _ingestion_http_error(exc) from exc
+
+    except EvidenceDocumentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evidence document not found",
+        ) from exc
+
+    except EvidencePersistenceValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Evidence persistence validation failed",
+        ) from exc
+
+    except EvidencePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Evidence persistence failed",
+        ) from exc
+
+    if persistence_result.outcome is IngestionOutcome.DUPLICATE:
+        response.status_code = status.HTTP_200_OK
+    else:
+        response.status_code = status.HTTP_201_CREATED
+
+    return EvidenceVersionIngestionResponse(
+        outcome=persistence_result.outcome.value,
+        document_id=persistence_result.document_id,
+        version_id=persistence_result.version_id,
+        version_number=persistence_result.version_number,
+        chunk_count=persistence_result.chunk_count,
+        ingestion_attempt_id=persistence_result.ingestion_attempt_id,
+    )
