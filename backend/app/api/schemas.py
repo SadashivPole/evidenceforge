@@ -161,3 +161,43 @@ class EvidenceChunkResponse(BaseModel):
     section_label: str | None
     page_number: int | None
     created_at: datetime
+
+class QuestionnaireQuestionResponse(BaseModel):
+    """One normalized questionnaire question returned by import preview."""
+
+    question_id: str
+    ordinal: int
+    sheet_name: str
+    source_row: int
+    question_text: str
+    section_path: list[str]
+
+
+class QuestionnaireImportedSheetResponse(BaseModel):
+    """Metadata for one worksheet that produced questions."""
+
+    sheet_name: str
+    header_row: int
+    question_header: str
+    section_header: str | None
+    question_count: int
+
+
+class QuestionnaireIgnoredSheetResponse(BaseModel):
+    """Metadata for one worksheet that was intentionally ignored."""
+
+    sheet_name: str
+    reason: str
+
+
+class QuestionnaireImportResponse(BaseModel):
+    """Deterministic XLSX questionnaire import preview."""
+
+    questionnaire_id: uuid.UUID
+    name: str
+    source_filename: str
+    status: str
+    parser_version: str
+    questions: list[QuestionnaireQuestionResponse]
+    imported_sheets: list[QuestionnaireImportedSheetResponse]
+    ignored_sheets: list[QuestionnaireIgnoredSheetResponse]
