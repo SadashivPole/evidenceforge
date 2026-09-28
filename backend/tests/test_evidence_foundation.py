@@ -1,4 +1,4 @@
-"""Tests for the Phase 1C evidence data model."""
+"""Tests for the EvidenceForge evidence data model."""
 
 from __future__ import annotations
 
@@ -89,6 +89,42 @@ def _create_document(
     return document
 
 
+def _create_version(
+    db: Session,
+    *,
+    document: EvidenceDocument,
+    user: User,
+    content: str,
+    version_number: int = 1,
+    filename: str = "policy.txt",
+    media_type: str = "text/plain",
+) -> EvidenceDocumentVersion:
+    content_bytes = content.encode("utf-8")
+    content_hash = hashlib.sha256(content_bytes).hexdigest()
+
+    version = EvidenceDocumentVersion(
+        document_id=document.id,
+        version_number=version_number,
+        normalized_sha256=content_hash,
+        raw_sha256=content_hash,
+        normalization_version="text-v1",
+        original_filename=filename,
+        media_type=media_type,
+        raw_size_bytes=len(content_bytes),
+        normalized_size_bytes=len(content_bytes),
+        extracted_text=content,
+        chunking_version="text-chunk-v1",
+        chunk_target_bytes=4096,
+        chunk_overlap_bytes=512,
+        created_by_user_id=user.id,
+    )
+
+    db.add(version)
+    db.flush()
+
+    return version
+
+
 def test_document_is_bound_to_workspace(
     db_session: Session,
 ) -> None:
@@ -131,21 +167,26 @@ def test_version_belongs_to_document(
         user=user,
     )
 
-    version = EvidenceDocumentVersion(
-        document_id=document.id,
-        version_number=1,
-        content_hash=hashlib.sha256(b"hello").hexdigest(),
-        original_filename="security-policy.md",
+    version = _create_version(
+        db_session,
+        document=document,
+        user=user,
+        content="hello",
+        filename="security-policy.md",
         media_type="text/markdown",
-        byte_size=5,
-        extracted_text="hello",
-        created_by_user_id=user.id,
     )
-    db_session.add(version)
     db_session.commit()
 
     assert version.document_id == document.id
     assert version.version_number == 1
+    assert version.normalized_sha256 == hashlib.sha256(b"hello").hexdigest()
+    assert version.raw_sha256 == hashlib.sha256(b"hello").hexdigest()
+    assert version.normalization_version == "text-v1"
+    assert version.raw_size_bytes == 5
+    assert version.normalized_size_bytes == 5
+    assert version.chunking_version == "text-chunk-v1"
+    assert version.chunk_target_bytes == 4096
+    assert version.chunk_overlap_bytes == 512
 
 
 def test_chunk_belongs_to_version(
@@ -167,30 +208,33 @@ def test_chunk_belongs_to_version(
         user=user,
     )
 
-    version = EvidenceDocumentVersion(
-        document_id=document.id,
-        version_number=1,
-        content_hash=hashlib.sha256(b"evidence").hexdigest(),
-        original_filename="policy.txt",
-        media_type="text/plain",
-        byte_size=8,
-        extracted_text="evidence",
-        created_by_user_id=user.id,
+    version = _create_version(
+        db_session,
+        document=document,
+        user=user,
+        content="evidence",
     )
-    db_session.add(version)
-    db_session.flush()
+
+    content = "evidence"
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     chunk = EvidenceChunk(
         document_version_id=version.id,
         chunk_index=0,
-        content="evidence",
-        content_hash=hashlib.sha256(b"evidence").hexdigest(),
+        content=content,
+        content_hash=content_hash,
+        normalized_start_byte=0,
+        normalized_end_byte=len(content.encode("utf-8")),
+        section_label=None,
+        page_number=None,
     )
     db_session.add(chunk)
     db_session.commit()
 
     assert chunk.document_version_id == version.id
     assert chunk.chunk_index == 0
+    assert chunk.normalized_start_byte == 0
+    assert chunk.normalized_end_byte == 8
 
 
 def test_duplicate_version_number_is_rejected(
@@ -212,29 +256,33 @@ def test_duplicate_version_number_is_rejected(
         user=user,
     )
 
-    first = EvidenceDocumentVersion(
-        document_id=document.id,
+    first = _create_version(
+        db_session,
+        document=document,
+        user=user,
+        content="one",
         version_number=1,
-        content_hash=hashlib.sha256(b"one").hexdigest(),
-        original_filename="policy.txt",
-        media_type="text/plain",
-        byte_size=3,
-        extracted_text="one",
-        created_by_user_id=user.id,
     )
+    db_session.commit()
+
+    assert first.version_number == 1
+
     second = EvidenceDocumentVersion(
         document_id=document.id,
         version_number=1,
-        content_hash=hashlib.sha256(b"two").hexdigest(),
+        normalized_sha256=hashlib.sha256(b"two").hexdigest(),
+        raw_sha256=hashlib.sha256(b"two").hexdigest(),
+        normalization_version="text-v1",
         original_filename="policy.txt",
         media_type="text/plain",
-        byte_size=3,
+        raw_size_bytes=3,
+        normalized_size_bytes=3,
         extracted_text="two",
+        chunking_version="text-chunk-v1",
+        chunk_target_bytes=4096,
+        chunk_overlap_bytes=512,
         created_by_user_id=user.id,
     )
-
-    db_session.add(first)
-    db_session.commit()
 
     db_session.add(second)
 
@@ -263,30 +311,32 @@ def test_duplicate_chunk_index_is_rejected(
         user=user,
     )
 
-    version = EvidenceDocumentVersion(
-        document_id=document.id,
-        version_number=1,
-        content_hash=hashlib.sha256(b"content").hexdigest(),
-        original_filename="policy.txt",
-        media_type="text/plain",
-        byte_size=7,
-        extracted_text="content",
-        created_by_user_id=user.id,
+    version = _create_version(
+        db_session,
+        document=document,
+        user=user,
+        content="content",
     )
-    db_session.add(version)
-    db_session.flush()
+
+    first_content = "first"
+    second_content = "second"
 
     first = EvidenceChunk(
         document_version_id=version.id,
         chunk_index=0,
-        content="first",
-        content_hash=hashlib.sha256(b"first").hexdigest(),
+        content=first_content,
+        content_hash=hashlib.sha256(first_content.encode("utf-8")).hexdigest(),
+        normalized_start_byte=0,
+        normalized_end_byte=len(first_content.encode("utf-8")),
     )
+
     second = EvidenceChunk(
         document_version_id=version.id,
         chunk_index=0,
-        content="second",
-        content_hash=hashlib.sha256(b"second").hexdigest(),
+        content=second_content,
+        content_hash=hashlib.sha256(second_content.encode("utf-8")).hexdigest(),
+        normalized_start_byte=0,
+        normalized_end_byte=len(second_content.encode("utf-8")),
     )
 
     db_session.add(first)
@@ -300,7 +350,7 @@ def test_duplicate_chunk_index_is_rejected(
     db_session.rollback()
 
 
-def test_sha256_content_hash_is_stored(
+def test_normalized_and_raw_sha256_are_stored(
     db_session: Session,
 ) -> None:
     content = b"approved security policy"
@@ -322,24 +372,24 @@ def test_sha256_content_hash_is_stored(
         user=user,
     )
 
-    version = EvidenceDocumentVersion(
-        document_id=document.id,
-        version_number=1,
-        content_hash=expected_hash,
-        original_filename="security-policy.txt",
-        media_type="text/plain",
-        byte_size=len(content),
-        extracted_text=content.decode("utf-8"),
-        created_by_user_id=user.id,
+    version = _create_version(
+        db_session,
+        document=document,
+        user=user,
+        content=content.decode("utf-8"),
+        filename="security-policy.txt",
     )
-    db_session.add(version)
     db_session.commit()
 
     stored = db_session.get(EvidenceDocumentVersion, version.id)
 
     assert stored is not None
-    assert stored.content_hash == expected_hash
-    assert len(stored.content_hash) == 64
+    assert stored.normalized_sha256 == expected_hash
+    assert stored.raw_sha256 == expected_hash
+    assert len(stored.normalized_sha256) == 64
+    assert len(stored.raw_sha256) == 64
+    assert stored.raw_size_bytes == len(content)
+    assert stored.normalized_size_bytes == len(content)
 
 
 def test_workspace_ownership_is_distinct(
