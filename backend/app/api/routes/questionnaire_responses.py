@@ -6,9 +6,14 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
+    QuestionnaireGroundingCandidateResponse,
+    QuestionnaireGroundingCitationResponse,
+    QuestionnaireGroundingResponse,
+    QuestionnaireGroundingSearchResultResponse,
     QuestionnaireResponseCitationResponse,
     QuestionnaireResponseLatestResponse,
     QuestionnaireResponseResponse,
@@ -18,6 +23,16 @@ from app.api.schemas import (
 from app.auth import WorkspaceContext, assert_workspace_role, get_workspace_context
 from app.db import get_db
 from app.models import WorkspaceRole
+from app.questionnaires.grounding.errors import (
+    GroundingError,
+    GroundingQueryValidationError,
+    GroundingQuestionNotFoundError,
+)
+from app.questionnaires.grounding.service import ground_question
+from app.questionnaires.persistence.models import (
+    QuestionnaireVersion,
+    QuestionnaireVersionQuestion,
+)
 from app.questionnaires.responses.errors import (
     EvidenceChunkCitationNotFoundError,
     QuestionnaireVersionQuestionNotFoundError,
@@ -50,6 +65,12 @@ _RESPONSE_PATH = (
     "/{workspace_id}/questionnaires/{questionnaire_id}"
     "/versions/{questionnaire_version_id}"
     "/questions/{questionnaire_version_question_id}/response"
+)
+
+_GROUNDING_PATH = (
+    "/{workspace_id}/questionnaires/{questionnaire_id}"
+    "/versions/{questionnaire_version_id}"
+    "/questions/{questionnaire_version_question_id}/grounding"
 )
 
 
@@ -95,6 +116,27 @@ def _response_http_error(exc: ResponsePersistenceError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Questionnaire response persistence failed",
+    )
+
+
+def _grounding_http_error(exc: GroundingError) -> HTTPException:
+    """Map grounding failures to safe API responses."""
+
+    if isinstance(exc, GroundingQuestionNotFoundError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Questionnaire version question not found",
+        )
+
+    if isinstance(exc, GroundingQueryValidationError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Questionnaire grounding query failed validation",
+        )
+
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Questionnaire grounding failed",
     )
 
 
@@ -172,6 +214,146 @@ def _latest_response_response(
             result.response.questionnaire_version_question_id
         ),
         current_revision=_revision_response(result, latest),
+    )
+
+
+def _grounding_question_in_scope(
+    db: Session,
+    *,
+    workspace_id: uuid.UUID,
+    questionnaire_id: uuid.UUID,
+    questionnaire_version_id: uuid.UUID,
+    questionnaire_version_question_id: uuid.UUID,
+) -> bool:
+    """Check the complete questionnaire/version/question path in one workspace."""
+
+    statement = (
+        select(QuestionnaireVersionQuestion.id)
+        .join(
+            QuestionnaireVersion,
+            (
+                (QuestionnaireVersion.id == QuestionnaireVersionQuestion.questionnaire_version_id)
+                & (
+                    QuestionnaireVersion.workspace_id
+                    == QuestionnaireVersionQuestion.workspace_id
+                )
+                & (
+                    QuestionnaireVersion.questionnaire_id
+                    == QuestionnaireVersionQuestion.questionnaire_id
+                )
+            ),
+        )
+        .where(
+            QuestionnaireVersion.workspace_id == workspace_id,
+            QuestionnaireVersion.id == questionnaire_version_id,
+            QuestionnaireVersion.questionnaire_id == questionnaire_id,
+            QuestionnaireVersionQuestion.workspace_id == workspace_id,
+            QuestionnaireVersionQuestion.id == questionnaire_version_question_id,
+            QuestionnaireVersionQuestion.questionnaire_version_id
+            == questionnaire_version_id,
+        )
+    )
+    return db.scalar(statement) is not None
+
+
+def _grounding_response(
+    result,
+    *,
+    questionnaire_id: uuid.UUID,
+) -> QuestionnaireGroundingResponse:
+    """Convert the domain grounding result into the public API schema."""
+
+    return QuestionnaireGroundingResponse(
+        workspace_id=result.workspace_id,
+        questionnaire_id=questionnaire_id,
+        questionnaire_version_id=result.questionnaire_version_id,
+        questionnaire_version_question_id=result.questionnaire_version_question_id,
+        normalized_query=result.normalized_query,
+        search_version=result.search_version,
+        result_limit=result.result_limit,
+        status=result.status,
+        results=[
+            QuestionnaireGroundingSearchResultResponse(
+                candidate=QuestionnaireGroundingCandidateResponse(
+                    chunk_id=search_result.candidate.chunk_id,
+                    document_id=search_result.candidate.document_id,
+                    version_id=search_result.candidate.version_id,
+                    version_number=search_result.candidate.version_number,
+                    chunk_index=search_result.candidate.chunk_index,
+                    content=search_result.candidate.content,
+                    content_hash=search_result.candidate.content_hash,
+                    normalized_start_byte=(
+                        search_result.candidate.normalized_start_byte
+                    ),
+                    normalized_end_byte=search_result.candidate.normalized_end_byte,
+                    section_label=search_result.candidate.section_label,
+                    page_number=search_result.candidate.page_number,
+                ),
+                score=search_result.score,
+                matched_terms=list(search_result.matched_terms),
+                exact_phrase_match=search_result.exact_phrase_match,
+                occurrence_count=search_result.occurrence_count,
+            )
+            for search_result in result.results
+        ],
+        citations=[
+            QuestionnaireGroundingCitationResponse(
+                workspace_id=citation.workspace_id,
+                document_id=citation.document_id,
+                version_id=citation.version_id,
+                version_number=citation.version_number,
+                chunk_id=citation.chunk_id,
+                chunk_index=citation.chunk_index,
+                content_hash=citation.content_hash,
+                normalized_start_byte=citation.normalized_start_byte,
+                normalized_end_byte=citation.normalized_end_byte,
+                section_label=citation.section_label,
+                page_number=citation.page_number,
+            )
+            for citation in result.citations
+        ],
+    )
+
+
+@router.get(
+    _GROUNDING_PATH,
+    response_model=QuestionnaireGroundingResponse,
+)
+def ground_questionnaire_question(
+    questionnaire_id: uuid.UUID,
+    questionnaire_version_id: uuid.UUID,
+    questionnaire_version_question_id: uuid.UUID,
+    context: WorkspaceAccess,
+    db: DbSession,
+) -> QuestionnaireGroundingResponse:
+    """Return deterministic evidence grounding for one authorized question."""
+
+    if not _grounding_question_in_scope(
+        db,
+        workspace_id=context.workspace.id,
+        questionnaire_id=questionnaire_id,
+        questionnaire_version_id=questionnaire_version_id,
+        questionnaire_version_question_id=questionnaire_version_question_id,
+    ):
+        raise _grounding_http_error(
+            GroundingQuestionNotFoundError(
+                "Questionnaire version question not found",
+            )
+        )
+
+    try:
+        result = ground_question(
+            db,
+            workspace_id=context.workspace.id,
+            questionnaire_version_id=questionnaire_version_id,
+            questionnaire_version_question_id=questionnaire_version_question_id,
+        )
+    except GroundingError as exc:
+        raise _grounding_http_error(exc) from exc
+
+    return _grounding_response(
+        result,
+        questionnaire_id=questionnaire_id,
     )
 
 
