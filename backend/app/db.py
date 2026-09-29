@@ -3,7 +3,7 @@
 from collections.abc import Generator
 
 from fastapi import Request
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -15,12 +15,22 @@ def create_db_engine(settings: Settings) -> Engine:
     """Create the SQLAlchemy engine for the configured database."""
 
     if settings.database_url.startswith("sqlite"):
-        return create_engine(
+        engine = create_engine(
             settings.database_url,
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
             pool_pre_ping=True,
         )
+
+        @event.listens_for(engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+            """Keep SQLite integrity checks aligned with PostgreSQL behavior."""
+
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
+        return engine
     return create_engine(settings.database_url, pool_pre_ping=True)
 
 

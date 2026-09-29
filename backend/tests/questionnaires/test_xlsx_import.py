@@ -8,12 +8,14 @@ from openpyxl import Workbook
 from app.questionnaires.xlsx.errors import (
     AmbiguousQuestionColumnError,
     InvalidQuestionValueError,
+    InvalidSourceQuestionIdError,
     InvalidXlsxWorkbookError,
     NoQuestionColumnError,
     TooManyQuestionsError,
     TooManySheetsError,
     UnsupportedXlsxExtensionError,
     XlsxFileTooLargeError,
+    XlsxImportError,
 )
 from app.questionnaires.xlsx.policy import XlsxImportPolicy
 from app.questionnaires.xlsx.service import import_xlsx
@@ -108,9 +110,7 @@ def test_import_accepts_case_and_whitespace_in_headers() -> None:
     )
 
     assert len(result.questionnaire.questions) == 1
-    assert result.questionnaire.questions[0].question_text == (
-        "Do you review privileged access?"
-    )
+    assert result.questionnaire.questions[0].question_text == ("Do you review privileged access?")
 
 
 def test_import_supports_questionnaire_question_header() -> None:
@@ -159,7 +159,26 @@ def test_blank_rows_are_ignored() -> None:
     assert result.questionnaire.questions[0].source_row == 4
 
 
-def test_duplicate_questions_remain_distinguishable_by_source_row() -> None:
+def test_invalid_explicit_source_id_is_an_xlsx_import_error() -> None:
+    data = make_workbook_bytes(
+        [
+            (
+                "Security",
+                [
+                    ["Question ID", "Question"],
+                    ["Q" * 256, "Question one"],
+                ],
+            )
+        ]
+    )
+
+    with pytest.raises(InvalidSourceQuestionIdError) as error:
+        import_xlsx(data=data, filename="security.xlsx")
+
+    assert isinstance(error.value, XlsxImportError)
+
+
+def test_duplicate_questions_remain_distinguishable_by_fallback_occurrence() -> None:
     data = make_workbook_bytes(
         [
             (
@@ -209,15 +228,9 @@ def test_question_ids_are_deterministic_across_imports() -> None:
         filename="security.xlsx",
     )
 
-    first_ids = tuple(
-        question.question_id
-        for question in first.questionnaire.questions
-    )
+    first_ids = tuple(question.question_id for question in first.questionnaire.questions)
 
-    second_ids = tuple(
-        question.question_id
-        for question in second.questionnaire.questions
-    )
+    second_ids = tuple(question.question_id for question in second.questionnaire.questions)
 
     assert first_ids == second_ids
 
@@ -249,10 +262,7 @@ def test_multiple_sheets_are_supported() -> None:
 
     assert len(result.questionnaire.questions) == 2
 
-    assert [
-        sheet.sheet_name
-        for sheet in result.imported_sheets
-    ] == ["Security", "Privacy"]
+    assert [sheet.sheet_name for sheet in result.imported_sheets] == ["Security", "Privacy"]
 
 
 def test_sheet_without_question_header_is_reported_as_ignored() -> None:
@@ -282,9 +292,7 @@ def test_sheet_without_question_header_is_reported_as_ignored() -> None:
     assert len(result.questionnaire.questions) == 1
     assert len(result.ignored_sheets) == 1
     assert result.ignored_sheets[0].sheet_name == "Instructions"
-    assert result.ignored_sheets[0].reason == (
-        "no supported question header found"
-    )
+    assert result.ignored_sheets[0].reason == ("no supported question header found")
 
 
 def test_no_question_header_fails() -> None:

@@ -6,6 +6,13 @@ import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 
+from app.questionnaires.policy import (
+    QUESTION_IDENTITY_VERSION,
+    QUESTION_NORMALIZATION_VERSION,
+    QUESTIONNAIRE_HASH_VERSION,
+    XLSX_IMPORT_VERSION,
+)
+
 
 class QuestionnaireStatus(StrEnum):
     """Lifecycle status for a questionnaire."""
@@ -31,7 +38,7 @@ class ResponseStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class QuestionnaireQuestion:
-    """One normalized questionnaire question."""
+    """One normalized questionnaire question and its source provenance."""
 
     question_id: str
     ordinal: int
@@ -39,17 +46,42 @@ class QuestionnaireQuestion:
     source_row: int
     question_text: str
     section_path: tuple[str, ...]
+    identity_kind: str = "fallback"
+    source_question_id: str | None = None
+
+    @property
+    def normalized_sheet_name(self) -> str:
+        """Return the normalized worksheet name used by the contract."""
+
+        return self.sheet_name
+
+    @property
+    def normalized_question_text(self) -> str:
+        """Return the normalized question text used by the contract."""
+
+        return self.question_text
+
+    @property
+    def normalized_section_path(self) -> tuple[str, ...]:
+        """Return the normalized section path used by the contract."""
+
+        return self.section_path
 
 
 @dataclass(frozen=True, slots=True)
 class Questionnaire:
-    """Normalized questionnaire representation."""
+    """Normalized questionnaire representation and deterministic metadata."""
 
     questionnaire_id: uuid.UUID
     name: str
     source_filename: str
     status: QuestionnaireStatus
     questions: tuple[QuestionnaireQuestion, ...]
+    parser_version: str = XLSX_IMPORT_VERSION
+    normalization_version: str = QUESTION_NORMALIZATION_VERSION
+    question_identity_version: str = QUESTION_IDENTITY_VERSION
+    hash_version: str = QUESTIONNAIRE_HASH_VERSION
+    normalized_questionnaire_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)

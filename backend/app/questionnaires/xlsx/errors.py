@@ -31,6 +31,18 @@ class AmbiguousQuestionColumnError(XlsxImportError):
     """Raised when a worksheet contains multiple supported question headers."""
 
 
+class AmbiguousSourceQuestionIdColumnError(XlsxImportError):
+    """Raised when a worksheet contains multiple source-ID headers."""
+
+
+class DuplicateSourceQuestionIdError(XlsxImportError):
+    """Raised when a workbook repeats a normalized explicit source question ID."""
+
+
+class InvalidSourceQuestionIdError(XlsxImportError):
+    """Raised when an explicit source question ID fails validation."""
+
+
 class TooManyQuestionsError(XlsxImportError):
     """Raised when the workbook contains more questions than permitted."""
 

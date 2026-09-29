@@ -7,9 +7,10 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.models import WorkspaceRole
+from app.questionnaires.types import ResponseStatus
 
 
 class WorkspaceCreate(BaseModel):
@@ -162,15 +163,21 @@ class EvidenceChunkResponse(BaseModel):
     page_number: int | None
     created_at: datetime
 
+
 class QuestionnaireQuestionResponse(BaseModel):
     """One normalized questionnaire question returned by import preview."""
 
     question_id: str
+    identity_kind: str
+    source_question_id: str | None
     ordinal: int
     sheet_name: str
+    normalized_sheet_name: str
     source_row: int
     question_text: str
+    normalized_question_text: str
     section_path: list[str]
+    normalized_section_path: list[str]
 
 
 class QuestionnaireImportedSheetResponse(BaseModel):
@@ -191,13 +198,110 @@ class QuestionnaireIgnoredSheetResponse(BaseModel):
 
 
 class QuestionnaireImportResponse(BaseModel):
-    """Deterministic XLSX questionnaire import preview."""
+    """Deterministic XLSX questionnaire import persistence result."""
 
     questionnaire_id: uuid.UUID
     name: str
     source_filename: str
     status: str
     parser_version: str
+    normalization_version: str
+    question_identity_version: str
+    hash_version: str
+    normalized_questionnaire_sha256: str
+    outcome: str
+    version_id: uuid.UUID
+    version_number: int
+    import_attempt_id: uuid.UUID
     questions: list[QuestionnaireQuestionResponse]
     imported_sheets: list[QuestionnaireImportedSheetResponse]
     ignored_sheets: list[QuestionnaireIgnoredSheetResponse]
+
+
+class QuestionnaireResponseUpsert(BaseModel):
+    """Payload for creating or revising one questionnaire response."""
+
+    answer: str | None = None
+    status: ResponseStatus
+    citation_chunk_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(
+            "citation_chunk_ids",
+            "evidence_chunk_ids",
+            "citation_ids",
+            "citations",
+        ),
+    )
+
+    @field_validator("citation_chunk_ids")
+    @classmethod
+    def validate_citation_chunk_ids(
+        cls,
+        value: list[uuid.UUID],
+    ) -> list[uuid.UUID]:
+        """Reject duplicate relationship targets before persistence."""
+
+        if len(set(value)) != len(value):
+            raise ValueError("A citation chunk cannot be supplied more than once")
+        return value
+
+
+class QuestionnaireResponseCitationResponse(BaseModel):
+    """Server-resolved provenance metadata for one response citation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    response_revision_id: uuid.UUID
+    citation_order: int
+    evidence_document_id: uuid.UUID
+    evidence_version_id: uuid.UUID
+    evidence_chunk_id: uuid.UUID
+    evidence_version_number: int
+    evidence_chunk_index: int
+    content_hash: str
+    normalized_start_byte: int
+    normalized_end_byte: int
+    section_label: str | None
+    page_number: int | None
+    created_at: datetime
+
+
+class QuestionnaireResponseRevisionResponse(BaseModel):
+    """One immutable questionnaire response revision with its citations."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    response_id: uuid.UUID
+    revision_number: int
+    answer: str | None
+    status: ResponseStatus
+    author_user_id: uuid.UUID | None
+    created_at: datetime
+    citations: list[QuestionnaireResponseCitationResponse]
+
+
+class QuestionnaireResponseResponse(BaseModel):
+    """Current response plus its complete immutable revision history."""
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    created_by_user_id: uuid.UUID
+    questionnaire_id: uuid.UUID
+    questionnaire_version_id: uuid.UUID
+    questionnaire_version_question_id: uuid.UUID
+    current_revision: QuestionnaireResponseRevisionResponse
+    revisions: list[QuestionnaireResponseRevisionResponse]
+
+
+class QuestionnaireResponseLatestResponse(BaseModel):
+    """Latest revision for one response in a questionnaire-version collection."""
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    created_by_user_id: uuid.UUID
+    questionnaire_id: uuid.UUID
+    questionnaire_version_id: uuid.UUID
+    questionnaire_version_question_id: uuid.UUID
+    current_revision: QuestionnaireResponseRevisionResponse

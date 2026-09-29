@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.api.routes.evidence import router as evidence_router
 from app.api.routes.health import router as health_router
+from app.api.routes.questionnaire_responses import router as questionnaire_responses_router
 from app.api.routes.questionnaires import router as questionnaires_router
 from app.api.routes.workspaces import router as workspaces_router
 from app.config import Settings, get_settings
@@ -27,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(workspaces_router)
     application.include_router(evidence_router)
     application.include_router(questionnaires_router)
+    application.include_router(questionnaire_responses_router)
 
     @application.get("/", tags=["service"])
     def service_info() -> dict[str, str]:

@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from io import BytesIO
+from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import WorkspaceMembership, WorkspaceRole
+from app.questionnaires.persistence.errors import (
+    QuestionnaireNotFoundError,
+    QuestionnairePersistenceError,
+    QuestionnairePersistenceValidationError,
+)
+from app.questionnaires.persistence.models import (
+    QuestionnaireImportAttempt,
+    QuestionnaireVersion,
+)
 from tests.conftest import (
     auth_headers,
     create_principal,
@@ -16,7 +28,10 @@ from tests.conftest import (
 )
 
 
-def make_workbook_bytes() -> bytes:
+def make_workbook_bytes(
+    *,
+    instruction: str = "This worksheet contains guidance only.",
+) -> bytes:
     """Create a deterministic questionnaire workbook for API tests."""
 
     workbook = Workbook()
@@ -39,12 +54,47 @@ def make_workbook_bytes() -> bytes:
     )
 
     instructions = workbook.create_sheet("Instructions")
-    instructions.append(["This worksheet contains guidance only."])
+    instructions.append([instruction])
 
     buffer = BytesIO()
     workbook.save(buffer)
 
     return buffer.getvalue()
+
+
+def make_invalid_source_id_workbook_bytes() -> bytes:
+    """Create a workbook with an over-length explicit source question ID."""
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Security"
+    worksheet.append(["Question ID", "Question"])
+    worksheet.append(["Q" * 256, "Do you use MFA?"])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _post_import(
+    client: TestClient,
+    principal,
+    workspace,
+    workbook: bytes,
+    *,
+    filename: str = "questionnaire.xlsx",
+):
+    return client.post(
+        f"/workspaces/{workspace.id}/questionnaires/import",
+        headers=auth_headers(principal),
+        files={
+            "file": (
+                filename,
+                workbook,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
 
 
 def test_questionnaire_xlsx_import_preview(
@@ -62,26 +112,30 @@ def test_questionnaire_xlsx_import_preview(
         name="Questionnaire Workspace",
     )
 
-    response = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=auth_headers(principal),
-        files={
-            "file": (
-                "vendor-questionnaire.xlsx",
-                make_workbook_bytes(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    response = _post_import(
+        client,
+        principal,
+        workspace,
+        make_workbook_bytes(),
+        filename="vendor-questionnaire.xlsx",
     )
 
     assert response.status_code == 200
 
     body = response.json()
 
+    assert body["outcome"] == "CREATED"
+    assert body["version_number"] == 1
+    assert body["version_id"]
+    assert body["import_attempt_id"]
     assert body["name"] == "vendor-questionnaire"
     assert body["source_filename"] == "vendor-questionnaire.xlsx"
     assert body["status"] == "IMPORTED"
     assert body["parser_version"] == "xlsx-import-v1"
+    assert body["normalization_version"] == "question-normalization-v1"
+    assert body["question_identity_version"] == "question-identity-v2"
+    assert body["hash_version"] == "questionnaire-hash-v1"
+    assert len(body["normalized_questionnaire_sha256"]) == 64
 
     assert len(body["questions"]) == 2
 
@@ -90,10 +144,15 @@ def test_questionnaire_xlsx_import_preview(
     assert first["ordinal"] == 1
     assert first["sheet_name"] == "Security"
     assert first["source_row"] == 2
-    assert first["question_text"] == (
+    assert first["question_text"] == ("Do you enforce multi-factor authentication?")
+    assert first["identity_kind"] == "fallback"
+    assert first["source_question_id"] is None
+    assert first["normalized_sheet_name"] == "Security"
+    assert first["normalized_question_text"] == (
         "Do you enforce multi-factor authentication?"
     )
     assert first["section_path"] == ["Access Control"]
+    assert first["normalized_section_path"] == ["Access Control"]
 
     second = body["questions"][1]
 
@@ -107,6 +166,48 @@ def test_questionnaire_xlsx_import_preview(
 
     assert len(body["ignored_sheets"]) == 1
     assert body["ignored_sheets"][0]["sheet_name"] == "Instructions"
+
+    version = db_session.scalar(
+        select(QuestionnaireVersion).where(
+            QuestionnaireVersion.workspace_id == workspace.id,
+        )
+    )
+    attempt = db_session.scalar(
+        select(QuestionnaireImportAttempt).where(
+            QuestionnaireImportAttempt.workspace_id == workspace.id,
+        )
+    )
+
+    assert version is not None
+    assert attempt is not None
+    assert body["questionnaire_id"] == str(version.questionnaire_id)
+    assert body["version_id"] == str(version.id)
+    assert body["import_attempt_id"] == str(attempt.id)
+
+
+def test_invalid_source_question_id_returns_422(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    principal = create_principal(
+        db_session,
+        email="invalid-source-id@example.com",
+        display_name="Invalid Source ID",
+    )
+    workspace = create_workspace_with_owner(
+        db_session,
+        principal,
+        name="Invalid Source ID Workspace",
+    )
+
+    response = _post_import(
+        client,
+        principal,
+        workspace,
+        make_invalid_source_id_workbook_bytes(),
+    )
+
+    assert response.status_code == 422
 
 
 def test_question_ids_are_stable_across_repeated_api_imports(
@@ -124,47 +225,156 @@ def test_question_ids_are_stable_across_repeated_api_imports(
         name="Stable Workspace",
     )
 
-    headers = auth_headers(principal)
     workbook = make_workbook_bytes()
 
-    first = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=headers,
-        files={
-            "file": (
-                "questionnaire.xlsx",
-                workbook,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    first = _post_import(client, principal, workspace, workbook)
+    second = _post_import(client, principal, workspace, workbook)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    first_body = first.json()
+    second_body = second.json()
+
+    assert first_body["outcome"] == "CREATED"
+    assert second_body["outcome"] == "IDENTICAL_DUPLICATE"
+    assert first_body["questionnaire_id"] == second_body["questionnaire_id"]
+    assert first_body["version_id"] == second_body["version_id"]
+    assert first_body["version_number"] == second_body["version_number"] == 1
+    assert first_body["import_attempt_id"] != second_body["import_attempt_id"]
+
+    first_ids = [question["question_id"] for question in first_body["questions"]]
+    second_ids = [question["question_id"] for question in second_body["questions"]]
+
+    assert first_ids == second_ids
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(QuestionnaireVersion)
+            .where(QuestionnaireVersion.workspace_id == workspace.id)
+        )
+        == 1
+    )
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(QuestionnaireImportAttempt)
+            .where(QuestionnaireImportAttempt.workspace_id == workspace.id)
+        )
+        == 2
     )
 
-    second = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=headers,
-        files={
-            "file": (
-                "questionnaire.xlsx",
-                workbook,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+
+def test_canonical_duplicate_returns_existing_version(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    principal = create_principal(
+        db_session,
+        email="canonical@example.com",
+        display_name="Canonical Duplicate",
+    )
+    workspace = create_workspace_with_owner(
+        db_session,
+        principal,
+        name="Canonical Workspace",
+    )
+
+    first = _post_import(
+        client,
+        principal,
+        workspace,
+        make_workbook_bytes(instruction="First guidance"),
+    )
+    second = _post_import(
+        client,
+        principal,
+        workspace,
+        make_workbook_bytes(instruction="Different guidance"),
     )
 
     assert first.status_code == 200
     assert second.status_code == 200
 
-    first_ids = [
-        question["question_id"]
-        for question in first.json()["questions"]
-    ]
+    first_body = first.json()
+    second_body = second.json()
 
-    second_ids = [
-        question["question_id"]
-        for question in second.json()["questions"]
-    ]
+    assert first_body["outcome"] == "CREATED"
+    assert second_body["outcome"] == "CANONICAL_DUPLICATE"
+    assert first_body["questionnaire_id"] == second_body["questionnaire_id"]
+    assert first_body["version_id"] == second_body["version_id"]
+    assert first_body["version_number"] == second_body["version_number"] == 1
+    assert first_body["import_attempt_id"] != second_body["import_attempt_id"]
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(QuestionnaireVersion)
+            .where(QuestionnaireVersion.workspace_id == workspace.id)
+        )
+        == 1
+    )
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(QuestionnaireImportAttempt)
+            .where(QuestionnaireImportAttempt.workspace_id == workspace.id)
+        )
+        == 2
+    )
 
-    assert first_ids == second_ids
+
+@pytest.mark.parametrize(
+    ("error_type", "expected_status", "expected_detail"),
+    [
+        (
+            QuestionnairePersistenceValidationError,
+            422,
+            "Questionnaire import failed persistence validation",
+        ),
+        (
+            QuestionnaireNotFoundError,
+            404,
+            "Questionnaire could not be resolved",
+        ),
+        (
+            QuestionnairePersistenceError,
+            500,
+            "Questionnaire persistence failed",
+        ),
+    ],
+)
+def test_persistence_failures_return_safe_http_errors(
+    client: TestClient,
+    db_session: Session,
+    error_type: type[QuestionnairePersistenceError],
+    expected_status: int,
+    expected_detail: str,
+) -> None:
+    principal = create_principal(
+        db_session,
+        email=f"persistence-{expected_status}@example.com",
+        display_name="Persistence Failure",
+    )
+    workspace = create_workspace_with_owner(
+        db_session,
+        principal,
+        name=f"Persistence Failure {expected_status}",
+    )
+
+    with patch(
+        "app.api.routes.questionnaires.persist_import",
+        side_effect=error_type("test failure"),
+    ):
+        response = _post_import(
+            client,
+            principal,
+            workspace,
+            make_workbook_bytes(),
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "test failure" not in response.text
 
 
 def test_unsupported_questionnaire_extension_returns_415(
@@ -182,16 +392,12 @@ def test_unsupported_questionnaire_extension_returns_415(
         name="Extension Workspace",
     )
 
-    response = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=auth_headers(principal),
-        files={
-            "file": (
-                "questionnaire.xls",
-                b"not an xlsx workbook",
-                "application/vnd.ms-excel",
-            )
-        },
+    response = _post_import(
+        client,
+        principal,
+        workspace,
+        b"not an xlsx workbook",
+        filename="questionnaire.xls",
     )
 
     assert response.status_code == 415
@@ -212,16 +418,12 @@ def test_corrupt_questionnaire_returns_422(
         name="Corrupt Workspace",
     )
 
-    response = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=auth_headers(principal),
-        files={
-            "file": (
-                "corrupt.xlsx",
-                b"definitely not a real workbook",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    response = _post_import(
+        client,
+        principal,
+        workspace,
+        b"definitely not a real workbook",
+        filename="corrupt.xlsx",
     )
 
     assert response.status_code == 422
@@ -244,16 +446,12 @@ def test_oversized_questionnaire_returns_413(
 
     oversized = b"x" * (10 * 1024 * 1024 + 1)
 
-    response = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=auth_headers(principal),
-        files={
-            "file": (
-                "large.xlsx",
-                oversized,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    response = _post_import(
+        client,
+        principal,
+        workspace,
+        oversized,
+        filename="large.xlsx",
     )
 
     assert response.status_code == 413
@@ -289,16 +487,11 @@ def test_viewer_cannot_import_questionnaire(
     )
     db_session.commit()
 
-    response = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=auth_headers(viewer),
-        files={
-            "file": (
-                "questionnaire.xlsx",
-                make_workbook_bytes(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    response = _post_import(
+        client,
+        viewer,
+        workspace,
+        make_workbook_bytes(),
     )
 
     assert response.status_code == 403
@@ -325,16 +518,11 @@ def test_cross_workspace_questionnaire_import_returns_404(
         display_name="Other User",
     )
 
-    response = client.post(
-        f"/workspaces/{workspace.id}/questionnaires/import",
-        headers=auth_headers(other),
-        files={
-            "file": (
-                "questionnaire.xlsx",
-                make_workbook_bytes(),
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
+    response = _post_import(
+        client,
+        other,
+        workspace,
+        make_workbook_bytes(),
     )
 
     assert response.status_code == 404

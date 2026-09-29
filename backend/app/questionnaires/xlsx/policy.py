@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-XLSX_IMPORT_VERSION = "xlsx-import-v1"
+from app.questionnaires.policy import XLSX_IMPORT_VERSION
 
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 MAX_SHEETS = 50
@@ -17,6 +17,16 @@ QUESTION_HEADERS = frozenset(
         "questions",
         "question text",
         "questionnaire question",
+    }
+)
+
+# Deliberately small and explicit. Generic "id" and "number" headers are not
+# accepted because they are too ambiguous for deterministic identity.
+SOURCE_QUESTION_ID_HEADERS = frozenset(
+    {
+        "question id",
+        "question_id",
+        "question identifier",
     }
 )
 
@@ -38,3 +48,12 @@ class XlsxImportPolicy:
     max_sheets: int = MAX_SHEETS
     max_questions: int = MAX_QUESTIONS
     max_header_scan_rows: int = MAX_HEADER_SCAN_ROWS
+
+
+__all__ = [
+    "QUESTION_HEADERS",
+    "SECTION_HEADERS",
+    "SOURCE_QUESTION_ID_HEADERS",
+    "XLSX_IMPORT_VERSION",
+    "XlsxImportPolicy",
+]
