@@ -268,6 +268,13 @@ class QuestionnaireVersionQuestion(Base):
             "questionnaire_question_id",
             name="uq_questionnaire_version_questions_question",
         ),
+        UniqueConstraint(
+            "workspace_id",
+            "questionnaire_id",
+            "questionnaire_version_id",
+            "id",
+            name="uq_questionnaire_version_questions_full_scope",
+        ),
         CheckConstraint(
             "ordinal > 0",
             name="ck_questionnaire_version_questions_positive_ordinal",
