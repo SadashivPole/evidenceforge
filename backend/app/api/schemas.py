@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.models import WorkspaceRole
+from app.questionnaires.grounding.types import GroundingStatus
 from app.questionnaires.types import ResponseStatus
 
 
@@ -216,6 +217,63 @@ class QuestionnaireImportResponse(BaseModel):
     questions: list[QuestionnaireQuestionResponse]
     imported_sheets: list[QuestionnaireImportedSheetResponse]
     ignored_sheets: list[QuestionnaireIgnoredSheetResponse]
+
+
+class QuestionnaireGroundingCandidateResponse(BaseModel):
+    """Evidence candidate metadata returned by deterministic grounding."""
+
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_number: int
+    chunk_index: int
+    content: str
+    content_hash: str
+    normalized_start_byte: int
+    normalized_end_byte: int
+    section_label: str | None
+    page_number: int | None
+
+
+class QuestionnaireGroundingSearchResultResponse(BaseModel):
+    """One ranked deterministic grounding search result."""
+
+    candidate: QuestionnaireGroundingCandidateResponse
+    score: int
+    matched_terms: list[str]
+    exact_phrase_match: bool
+    occurrence_count: int
+
+
+class QuestionnaireGroundingCitationResponse(BaseModel):
+    """Citation-ready immutable provenance for one grounding result."""
+
+    workspace_id: uuid.UUID
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_number: int
+    chunk_id: uuid.UUID
+    chunk_index: int
+    content_hash: str
+    normalized_start_byte: int
+    normalized_end_byte: int
+    section_label: str | None
+    page_number: int | None
+
+
+class QuestionnaireGroundingResponse(BaseModel):
+    """Deterministic evidence grounding for one questionnaire question."""
+
+    workspace_id: uuid.UUID
+    questionnaire_id: uuid.UUID
+    questionnaire_version_id: uuid.UUID
+    questionnaire_version_question_id: uuid.UUID
+    normalized_query: str
+    search_version: str
+    result_limit: int
+    status: GroundingStatus
+    results: list[QuestionnaireGroundingSearchResultResponse]
+    citations: list[QuestionnaireGroundingCitationResponse]
 
 
 class QuestionnaireResponseUpsert(BaseModel):
