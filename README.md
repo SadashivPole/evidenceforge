@@ -414,7 +414,9 @@ The PostgreSQL response concurrency tests are included in the automated validati
 The current repository has been validated with:
 
 ```text
-270 tests passed
+281 tests passed
+8 tests skipped
+1 warning
 ```
 
 Additional validation performed during the questionnaire response work includes:
@@ -515,7 +517,9 @@ python -m pytest -q
 For the current validated repository state:
 
 ```text
-270 passed
+281 passed
+8 skipped
+1 warning
 ```
 
 ---

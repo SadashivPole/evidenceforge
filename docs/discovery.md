@@ -13,7 +13,7 @@ The following are treated as confirmed requirements for this planning pass becau
 - EvidenceForge is a local-first evidence-bound security questionnaire response workbench.
 - The core behavior is evidence first, grounded draft, citations, human review, and export.
 - Drafting must abstain explicitly when evidence is insufficient.
-- The MVP includes a local workspace/account model, PDF/TXT/MD ingestion, single-sheet CSV/XLSX import, PostgreSQL plus pgvector, PostgreSQL full-text search, hybrid retrieval, reciprocal-rank fusion, one LLM provider, structured JSON, citations, review, export, evaluation, observability, Docker deployment, security controls, and an audit trail.
+- The target MVP architecture includes a local workspace/account model, PDF/TXT/MD ingestion, single-sheet CSV/XLSX import, PostgreSQL plus pgvector, PostgreSQL full-text search, hybrid retrieval, reciprocal-rank fusion, one LLM provider, structured JSON, citations, review, export, evaluation, observability, Docker deployment, security controls, and an audit trail. These are target capabilities, not a statement that they are all implemented in the current repository.
 - OCR, web crawling, collaboration integrations, MCP, multi-provider routing, billing, automatic submission, enterprise SSO/SCIM, Kubernetes, fine-tuning, and autonomous provisioning are not to be implemented in the MVP.
 - The bounded agent flow and review states are prescribed.
 - The threat areas that must be addressed include prompt injection, cross-workspace leakage, malicious files, stale evidence, PII/log leakage, cost/DoS abuse, and authorization failures.
@@ -187,4 +187,4 @@ If these conditions are not met, narrow or change the workflow before implementi
 
 ## Phase 0 conclusion
 
-The MVP is sufficiently bounded for a vertical slice, but the security boundary, data-provider boundary, freshness policy, and human approval workflow must be confirmed before generation is implemented. The next step should be the smallest evidence-and-citation path described in the README, with authorization and auditability built in rather than retrofitted.
+The MVP is sufficiently bounded for a vertical slice. The current repository has completed the Phase 1 persistence, grounding, and human question-review foundation, but semantic retrieval, generation, and the full evaluation pipeline remain future implementation work. The security boundary, data-provider boundary, freshness policy, and human approval workflow must be confirmed before generation is implemented. The next step should be the smallest deterministic retrieval path described in the roadmap, with authorization and auditability built in rather than retrofitted.
