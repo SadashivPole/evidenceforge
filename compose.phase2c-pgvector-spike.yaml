@@ -1,0 +1,24 @@
+name: evidenceforge-phase2c-pgvector-spike
+
+services:
+  pgvector-spike:
+    image: pgvector/pgvector:0.8.6-pg16
+    environment:
+      POSTGRES_DB: evidenceforge_pgvector_spike
+      POSTGRES_USER: evidenceforge_spike
+      POSTGRES_PASSWORD: ${EVIDENCEFORGE_PGVECTOR_SPIKE_PASSWORD:?Set EVIDENCEFORGE_PGVECTOR_SPIKE_PASSWORD in the shell}
+    ports:
+      - "${EVIDENCEFORGE_PGVECTOR_SPIKE_PORT:-55433}:5432"
+    volumes:
+      - evidenceforge-phase2c-pgvector-spike-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  evidenceforge-phase2c-pgvector-spike-data:
+    name: evidenceforge-phase2c-pgvector-spike-data
