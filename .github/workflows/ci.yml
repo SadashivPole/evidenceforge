@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install backend development dependencies
+        run: python -m pip install -e "backend[dev]"
+
+      - name: Check backend lint
+        run: ruff check backend/app backend/tests backend/migrations
+
+      - name: Check backend formatting
+        run: ruff format --check backend/app backend/tests backend/migrations
+
+      - name: Compile backend
+        run: python -m compileall -q backend
+
+      - name: Run backend tests
+        run: python -m pytest -q
+
+  backend-postgresql:
+    name: Backend PostgreSQL concurrency
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: evidenceforge
+          POSTGRES_PASSWORD: evidenceforge
+          POSTGRES_DB: evidenceforge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U evidenceforge -d evidenceforge_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install backend development dependencies
+        run: python -m pip install -e "backend[dev]"
+
+      - name: Run PostgreSQL evidence persistence tests
+        env:
+          EVIDENCEFORGE_TEST_DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@localhost:5432/evidenceforge_test
+        run: python -m pytest -q backend/tests/test_evidence_persistence_postgres.py
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend lint
+        run: npm run lint
+
+      - name: Run frontend typecheck
+        run: npm run typecheck
+
+      - name: Check frontend formatting
+        run: npm run format:check
+
+      - name: Build frontend
+        run: npm run build
