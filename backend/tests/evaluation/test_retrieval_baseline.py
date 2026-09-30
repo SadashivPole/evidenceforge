@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import uuid
+from collections import Counter
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,7 @@ from app.evidence.search.service import search_chunks
 from app.evidence.search.types import SearchChunkCandidate
 from app.models import EvidenceDocument, User, Workspace
 from tests.evaluation.retrieval_cases import (
+    EVALUATION_CASES,
     MAIN_WORKSPACE_ID,
     OTHER_WORKSPACE_ID,
     load_evaluation_cases,
@@ -70,11 +72,22 @@ def _persist_text(
 def test_fixture_loading_is_stable_and_covers_all_categories() -> None:
     cases = load_evaluation_cases()
 
-    assert len(cases) == 22
+    assert len(cases) == 60
     assert [case.case_id for case in cases] == [case.case_id for case in load_evaluation_cases()]
+    assert [case.case_id for case in cases[:22]] == [case.case_id for case in EVALUATION_CASES]
+    assert Counter(case.category for case in cases) == Counter(
+        {
+            EvaluationCategory.SUPPORTED: 20,
+            EvaluationCategory.AMBIGUOUS: 10,
+            EvaluationCategory.INSUFFICIENT_EVIDENCE: 10,
+            EvaluationCategory.CONFLICTING_STALE: 10,
+            EvaluationCategory.MALICIOUS_INJECTED: 10,
+        }
+    )
     assert {case.category for case in cases} == set(EvaluationCategory)
     assert all(case.candidates for case in cases)
     assert all(case.gold_relevance for case in cases)
+    assert all(case.claim_boundary and case.gold_rationale for case in cases)
 
 
 def test_support_recall_at_5_counts_only_supporting_grades() -> None:
@@ -175,8 +188,8 @@ def test_existing_lexical_ordering_is_deterministic() -> None:
 def test_category_aggregation_is_deterministic() -> None:
     report = evaluate_cases(load_evaluation_cases())
 
-    assert report.case_count == 22
-    assert sum(metrics.case_count for metrics in report.category_breakdown) == 22
+    assert report.case_count == 60
+    assert sum(metrics.case_count for metrics in report.category_breakdown) == 60
     assert [metrics.category for metrics in report.category_breakdown] == list(EvaluationCategory)
     assert all(0.0 <= metrics.macro_recall_at_5 <= 1.0 for metrics in report.category_breakdown)
     insufficient = next(
@@ -185,6 +198,133 @@ def test_category_aggregation_is_deterministic() -> None:
         if metrics.category == EvaluationCategory.INSUFFICIENT_EVIDENCE
     )
     assert insufficient.macro_recall_at_5 == 0.0
+    assert report.evidence_state_match_rate == 1.0
+    assert report.correct_abstention_rate is None
+
+
+def test_evidence_state_match_distinguishes_evidence_states() -> None:
+    report = evaluate_cases(load_evaluation_cases())
+    by_category = {metrics.category: metrics for metrics in report.category_breakdown}
+
+    assert by_category[EvaluationCategory.SUPPORTED].evidence_state_match_rate == 1.0
+    assert by_category[EvaluationCategory.AMBIGUOUS].evidence_state_match_rate == 1.0
+    assert by_category[EvaluationCategory.INSUFFICIENT_EVIDENCE].evidence_state_match_rate == 1.0
+    assert by_category[EvaluationCategory.CONFLICTING_STALE].evidence_state_match_rate == 1.0
+    assert by_category[EvaluationCategory.MALICIOUS_INJECTED].evidence_state_match_rate == 1.0
+
+
+def test_correct_abstention_is_unavailable_without_response_layer() -> None:
+    report = evaluate_cases(load_evaluation_cases())
+    serialized = report_to_dict(report)
+    rendered = format_report(report)
+
+    assert report.correct_abstention_rate is None
+    assert serialized["correct_abstention_rate"] is None
+    assert serialized["correct_abstention_interpretation"] == (
+        "Correct Abstention: N/A — response/generation layer not implemented"
+    )
+    assert '"correct_abstention_rate": null' in rendered
+    assert "Correct Abstention: N/A — response/generation layer not implemented" in rendered
+    assert "macro_correct_abstention" not in serialized
+    assert all("correct_abstention" not in result for result in serialized["case_results"])
+
+
+def test_conflict_stale_metrics_surface_current_stale_and_conflicting_evidence() -> None:
+    report = evaluate_cases(load_evaluation_cases())
+    conflict_results = tuple(
+        result
+        for result in report.case_results
+        if result.category == EvaluationCategory.CONFLICTING_STALE
+    )
+
+    assert len(conflict_results) == 10
+    assert all(result.current_evidence_surfaced for result in conflict_results)
+    assert all(result.stale_evidence_surfaced for result in conflict_results)
+    assert all(result.conflicting_evidence_surfaced for result in conflict_results)
+    assert all(result.conflict_stale_complete == 1 for result in conflict_results)
+    assert report.conflict_stale_complete_rate == 1.0
+
+
+def test_injection_metrics_measure_surfacing_and_inert_evaluator_handling() -> None:
+    report = evaluate_cases(load_evaluation_cases())
+    malicious_results = tuple(
+        result
+        for result in report.case_results
+        if result.category == EvaluationCategory.MALICIOUS_INJECTED
+    )
+
+    assert len(malicious_results) == 10
+    assert sum(result.injection_candidates_surfaced for result in malicious_results) > 0
+    assert all(result.injection_content_inert == 1 for result in malicious_results)
+    assert all(
+        result.injection_content_inert is None
+        for result in report.case_results
+        if result.category != EvaluationCategory.MALICIOUS_INJECTED
+    )
+    assert report.injection_candidates_surfaced == 10
+    assert report.injection_content_inert_rate == 1.0
+
+
+def test_injection_escape_is_unavailable_without_a_generation_layer() -> None:
+    report = evaluate_cases(load_evaluation_cases())
+    serialized = report_to_dict(report)
+
+    assert report.injection_escape_rate is None
+    assert serialized["injection_escape_rate"] is None
+    assert "Injection Escape: N/A — generation layer not implemented" in format_report(report)
+    assert all("injection_escape" not in result for result in serialized["case_results"])
+
+
+def test_malicious_evidence_is_not_executed_or_mutated_by_evaluator() -> None:
+    cases = load_evaluation_cases()
+    before = tuple(
+        (
+            case.case_id,
+            case.workspace_id,
+            case.injection_expectation,
+            tuple((item.candidate_id, item.candidate.content) for item in case.candidates),
+        )
+        for case in cases
+        if case.category == EvaluationCategory.MALICIOUS_INJECTED
+    )
+
+    report = evaluate_cases(cases)
+    after = tuple(
+        (
+            case.case_id,
+            case.workspace_id,
+            case.injection_expectation,
+            tuple((item.candidate_id, item.candidate.content) for item in case.candidates),
+        )
+        for case in cases
+        if case.category == EvaluationCategory.MALICIOUS_INJECTED
+    )
+
+    assert before == after
+    assert all(
+        result.injection_content_inert == 1
+        for result in report.case_results
+        if result.category == EvaluationCategory.MALICIOUS_INJECTED
+    )
+
+
+def test_workspace_leakage_metric_is_zero() -> None:
+    report = evaluate_cases(load_evaluation_cases())
+
+    assert report.workspace_leakage_count == 0
+    assert report.workspace_leakage_rate == 0.0
+    assert all(result.unauthorized_candidates_surfaced == 0 for result in report.case_results)
+
+
+def test_phase_2a_cases_remain_first_and_unchanged() -> None:
+    cases = load_evaluation_cases()
+
+    assert tuple(case.case_id for case in cases[:22]) == tuple(
+        case.case_id for case in EVALUATION_CASES
+    )
+    assert all(
+        case.category == EVALUATION_CASES[index].category for index, case in enumerate(cases[:22])
+    )
 
 
 def test_evaluation_is_reproducible() -> None:
@@ -194,6 +334,7 @@ def test_evaluation_is_reproducible() -> None:
     second = report_to_dict(evaluate_cases(cases))
 
     assert first == second
+    assert first["evidence_state_match_rate"] == second["evidence_state_match_rate"] == 1.0
     assert format_report(evaluate_cases(cases)) == format_report(evaluate_cases(cases))
 
 
@@ -278,7 +419,7 @@ def test_malicious_injected_cases_are_evaluated_as_plain_evidence_content() -> N
         if case.category == EvaluationCategory.MALICIOUS_INJECTED
     )
 
-    assert len(malicious_cases) == 3
+    assert len(malicious_cases) == 10
     assert any(
         "Ignore all prior instructions" in item.candidate.content
         for case in malicious_cases
@@ -286,7 +427,7 @@ def test_malicious_injected_cases_are_evaluated_as_plain_evidence_content() -> N
     )
 
     results = evaluate_cases(malicious_cases)
-    assert results.case_count == 3
+    assert results.case_count == 10
     malicious_category = EvaluationCategory.MALICIOUS_INJECTED
     assert all(result.category == malicious_category for result in results.case_results)
 
@@ -297,4 +438,4 @@ def test_evaluation_output_contains_per_case_and_category_results() -> None:
 
     assert report.case_results
     assert report.category_breakdown
-    assert report.case_count == 22
+    assert report.case_count == 60
