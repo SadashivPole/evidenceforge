@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -415,6 +416,83 @@ class EvidenceChunk(Base):
     )
     page_number: Mapped[int | None] = mapped_column(
         nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
+class EvidenceChunkEmbedding(Base):
+    """Workspace-scoped persisted embedding for one immutable evidence chunk."""
+
+    __tablename__ = "evidence_chunk_embeddings"
+
+    __table_args__ = (
+        CheckConstraint(
+            "embedding_dimension = 384",
+            name="ck_evidence_chunk_embeddings_dimension",
+        ),
+        UniqueConstraint(
+            "evidence_chunk_id",
+            "evidence_content_hash",
+            "workspace_id",
+            "model_id",
+            "model_version",
+            "configuration_hash",
+            name="uq_evidence_chunk_embeddings_generation",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    evidence_chunk_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "evidence_chunks.id",
+            ondelete="CASCADE",
+            name="fk_evidence_chunk_embeddings_chunk",
+        ),
+        index=True,
+    )
+    evidence_content_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "workspaces.id",
+            ondelete="CASCADE",
+            name="fk_evidence_chunk_embeddings_workspace",
+        ),
+        nullable=False,
+        index=True,
+    )
+    model_id: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        index=True,
+    )
+    model_version: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+    configuration_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    embedding_dimension: Mapped[int] = mapped_column(
+        nullable=False,
+    )
+    embedding: Mapped[list[float]] = mapped_column(
+        Vector(384),
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
