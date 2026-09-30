@@ -180,12 +180,9 @@ def test_every_existing_response_status_is_accepted_with_its_required_shape(
             citation_chunk_ids=citation_ids,
         )
 
-    assert (
-        db_session.scalar(
-            select(func.count()).select_from(QuestionnaireResponseRevision)
-        )
-        == len(cases)
-    )
+    assert db_session.scalar(
+        select(func.count()).select_from(QuestionnaireResponseRevision)
+    ) == len(cases)
 
 
 def test_cross_workspace_questionnaire_version_question_is_rejected(
@@ -250,12 +247,7 @@ def test_cross_workspace_questionnaire_version_question_is_rejected(
             status=ResponseStatus.PROPOSED,
         )
 
-    assert (
-        db_session.scalar(
-            select(func.count()).select_from(QuestionnaireResponse)
-        )
-        == 0
-    )
+    assert db_session.scalar(select(func.count()).select_from(QuestionnaireResponse)) == 0
 
 
 def test_cited_evidence_chunk_cannot_be_deleted(db_session: Session) -> None:

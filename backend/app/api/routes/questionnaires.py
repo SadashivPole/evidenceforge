@@ -135,9 +135,7 @@ def import_questionnaire(
         normalization_version=result.questionnaire.normalization_version,
         question_identity_version=result.questionnaire.question_identity_version,
         hash_version=result.questionnaire.hash_version,
-        normalized_questionnaire_sha256=(
-            result.questionnaire.normalized_questionnaire_sha256
-        ),
+        normalized_questionnaire_sha256=(result.questionnaire.normalized_questionnaire_sha256),
         outcome=persistence_result.outcome,
         version_id=persistence_result.version_id,
         version_number=persistence_result.version_number,

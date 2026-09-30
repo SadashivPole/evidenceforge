@@ -50,14 +50,8 @@ def get_version_question(
         .join(
             QuestionnaireVersion,
             (
-                (
-                    QuestionnaireVersion.id
-                    == QuestionnaireVersionQuestion.questionnaire_version_id
-                )
-                & (
-                    QuestionnaireVersion.workspace_id
-                    == QuestionnaireVersionQuestion.workspace_id
-                )
+                (QuestionnaireVersion.id == QuestionnaireVersionQuestion.questionnaire_version_id)
+                & (QuestionnaireVersion.workspace_id == QuestionnaireVersionQuestion.workspace_id)
                 & (
                     QuestionnaireVersion.questionnaire_id
                     == QuestionnaireVersionQuestion.questionnaire_id
@@ -66,8 +60,7 @@ def get_version_question(
         )
         .where(
             QuestionnaireVersionQuestion.workspace_id == workspace_id,
-            QuestionnaireVersionQuestion.questionnaire_version_id
-            == questionnaire_version_id,
+            QuestionnaireVersionQuestion.questionnaire_version_id == questionnaire_version_id,
             QuestionnaireVersionQuestion.id == questionnaire_version_question_id,
         )
     )
@@ -126,12 +119,11 @@ def list_responses_for_version(
         .join(
             QuestionnaireVersionQuestion,
             (
-                (QuestionnaireVersionQuestion.id
-                 == QuestionnaireResponse.questionnaire_version_question_id)
-                & (
-                    QuestionnaireVersionQuestion.workspace_id
-                    == QuestionnaireResponse.workspace_id
+                (
+                    QuestionnaireVersionQuestion.id
+                    == QuestionnaireResponse.questionnaire_version_question_id
                 )
+                & (QuestionnaireVersionQuestion.workspace_id == QuestionnaireResponse.workspace_id)
                 & (
                     QuestionnaireVersionQuestion.questionnaire_id
                     == QuestionnaireResponse.questionnaire_id

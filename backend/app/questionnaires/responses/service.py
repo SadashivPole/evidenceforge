@@ -65,9 +65,7 @@ class ResponseReadResult:
 
     response: QuestionnaireResponse
     revisions: tuple[QuestionnaireResponseRevision, ...]
-    citations_by_revision: dict[
-        uuid.UUID, tuple[QuestionnaireResponseCitation, ...]
-    ]
+    citations_by_revision: dict[uuid.UUID, tuple[QuestionnaireResponseCitation, ...]]
 
 
 def _coerce_status(status: ResponseStatus | str) -> ResponseStatus:
@@ -86,17 +84,13 @@ def _validate_response_values(
     """Validate only the approved Phase 1K status rules."""
 
     if len(set(citation_chunk_ids)) != len(citation_chunk_ids):
-        raise ResponseValidationError(
-            "A citation chunk cannot be supplied more than once"
-        )
+        raise ResponseValidationError("A citation chunk cannot be supplied more than once")
 
     if answer is None and status not in _NULL_ANSWER_STATUSES:
         raise ResponseValidationError("This response status requires an answer")
 
     if status is ResponseStatus.CONFLICTING_SOURCES and len(citation_chunk_ids) < 2:
-        raise ResponseValidationError(
-            "CONFLICTING_SOURCES requires at least two citations"
-        )
+        raise ResponseValidationError("CONFLICTING_SOURCES requires at least two citations")
 
     if status is ResponseStatus.APPROVED and not citation_chunk_ids:
         raise ResponseValidationError("APPROVED requires at least one citation")
@@ -112,9 +106,7 @@ def _is_identical_update(
 ) -> bool:
     """Return whether a write has exactly the current immutable state."""
 
-    existing_ids = tuple(
-        citation.evidence_chunk_id for citation in current_citations
-    )
+    existing_ids = tuple(citation.evidence_chunk_id for citation in current_citations)
     return (
         current.answer == answer
         and current.status == status.value
@@ -171,9 +163,7 @@ def _persist_once(
     if question is None or (
         questionnaire_id is not None and question.questionnaire_id != questionnaire_id
     ):
-        raise QuestionnaireVersionQuestionNotFoundError(
-            "Questionnaire version question not found"
-        )
+        raise QuestionnaireVersionQuestionNotFoundError("Questionnaire version question not found")
 
     targets = resolve_evidence_chunks(
         db,
@@ -269,9 +259,7 @@ def _persist_once(
         metadata={
             "questionnaire_id": str(response.questionnaire_id),
             "questionnaire_version_id": str(response.questionnaire_version_id),
-            "questionnaire_version_question_id": str(
-                response.questionnaire_version_question_id
-            ),
+            "questionnaire_version_question_id": str(response.questionnaire_version_question_id),
             "revision_id": str(revision.id),
             "revision_number": revision.revision_number,
             "status": status.value,
@@ -360,9 +348,7 @@ def save_response(
             ) from exc
         except SQLAlchemyError as exc:
             db.rollback()
-            raise ResponsePersistenceError(
-                "Questionnaire response persistence failed"
-            ) from exc
+            raise ResponsePersistenceError("Questionnaire response persistence failed") from exc
         except Exception:
             db.rollback()
             raise

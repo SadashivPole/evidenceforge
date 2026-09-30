@@ -183,18 +183,14 @@ def _revision_response(
 def _response_response(
     result: ResponseReadResult,
 ) -> QuestionnaireResponseResponse:
-    revisions = [
-        _revision_response(result, revision) for revision in result.revisions
-    ]
+    revisions = [_revision_response(result, revision) for revision in result.revisions]
     return QuestionnaireResponseResponse(
         id=result.response.id,
         workspace_id=result.response.workspace_id,
         created_by_user_id=result.response.created_by_user_id,
         questionnaire_id=result.response.questionnaire_id,
         questionnaire_version_id=result.response.questionnaire_version_id,
-        questionnaire_version_question_id=(
-            result.response.questionnaire_version_question_id
-        ),
+        questionnaire_version_question_id=(result.response.questionnaire_version_question_id),
         current_revision=revisions[-1],
         revisions=revisions,
     )
@@ -210,9 +206,7 @@ def _latest_response_response(
         created_by_user_id=result.response.created_by_user_id,
         questionnaire_id=result.response.questionnaire_id,
         questionnaire_version_id=result.response.questionnaire_version_id,
-        questionnaire_version_question_id=(
-            result.response.questionnaire_version_question_id
-        ),
+        questionnaire_version_question_id=(result.response.questionnaire_version_question_id),
         current_revision=_revision_response(result, latest),
     )
 
@@ -233,10 +227,7 @@ def _grounding_question_in_scope(
             QuestionnaireVersion,
             (
                 (QuestionnaireVersion.id == QuestionnaireVersionQuestion.questionnaire_version_id)
-                & (
-                    QuestionnaireVersion.workspace_id
-                    == QuestionnaireVersionQuestion.workspace_id
-                )
+                & (QuestionnaireVersion.workspace_id == QuestionnaireVersionQuestion.workspace_id)
                 & (
                     QuestionnaireVersion.questionnaire_id
                     == QuestionnaireVersionQuestion.questionnaire_id
@@ -249,8 +240,7 @@ def _grounding_question_in_scope(
             QuestionnaireVersion.questionnaire_id == questionnaire_id,
             QuestionnaireVersionQuestion.workspace_id == workspace_id,
             QuestionnaireVersionQuestion.id == questionnaire_version_question_id,
-            QuestionnaireVersionQuestion.questionnaire_version_id
-            == questionnaire_version_id,
+            QuestionnaireVersionQuestion.questionnaire_version_id == questionnaire_version_id,
         )
     )
     return db.scalar(statement) is not None
@@ -282,9 +272,7 @@ def _grounding_response(
                     chunk_index=search_result.candidate.chunk_index,
                     content=search_result.candidate.content,
                     content_hash=search_result.candidate.content_hash,
-                    normalized_start_byte=(
-                        search_result.candidate.normalized_start_byte
-                    ),
+                    normalized_start_byte=(search_result.candidate.normalized_start_byte),
                     normalized_end_byte=search_result.candidate.normalized_end_byte,
                     section_label=search_result.candidate.section_label,
                     page_number=search_result.candidate.page_number,

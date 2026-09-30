@@ -57,10 +57,7 @@ def _load_question(
             QuestionnaireVersion,
             (
                 (QuestionnaireVersion.id == QuestionnaireVersionQuestion.questionnaire_version_id)
-                & (
-                    QuestionnaireVersion.workspace_id
-                    == QuestionnaireVersionQuestion.workspace_id
-                )
+                & (QuestionnaireVersion.workspace_id == QuestionnaireVersionQuestion.workspace_id)
                 & (
                     QuestionnaireVersion.questionnaire_id
                     == QuestionnaireVersionQuestion.questionnaire_id
@@ -72,8 +69,7 @@ def _load_question(
             QuestionnaireVersion.id == questionnaire_version_id,
             QuestionnaireVersionQuestion.workspace_id == workspace_id,
             QuestionnaireVersionQuestion.id == questionnaire_version_question_id,
-            QuestionnaireVersionQuestion.questionnaire_version_id
-            == questionnaire_version_id,
+            QuestionnaireVersionQuestion.questionnaire_version_id == questionnaire_version_id,
         )
     )
     return db.scalar(statement)
@@ -101,9 +97,7 @@ def ground_question(
         questionnaire_version_question_id=questionnaire_version_question_id,
     )
     if question is None:
-        raise GroundingQuestionNotFoundError(
-            "Questionnaire version question not found"
-        )
+        raise GroundingQuestionNotFoundError("Questionnaire version question not found")
 
     normalized_query = normalize_grounding_query(
         question.normalized_question_text,
@@ -123,9 +117,7 @@ def ground_question(
             limit=effective_limit,
         )
     except (TypeError, ValueError) as exc:
-        raise GroundingQueryValidationError(
-            "Grounding search input is invalid"
-        ) from exc
+        raise GroundingQueryValidationError("Grounding search input is invalid") from exc
 
     citations: tuple[EvidenceCitation, ...] = tuple(
         citation_from_candidate(

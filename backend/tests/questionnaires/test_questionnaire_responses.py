@@ -478,18 +478,6 @@ def test_failed_citation_mutation_rolls_back_response_and_revision(
             citation_chunk_ids=(missing_chunk_id,),
         )
 
-    assert (
-        db_session.scalar(select(func.count()).select_from(QuestionnaireResponse)) == 0
-    )
-    assert (
-        db_session.scalar(
-            select(func.count()).select_from(QuestionnaireResponseRevision)
-        )
-        == 0
-    )
-    assert (
-        db_session.scalar(
-            select(func.count()).select_from(QuestionnaireResponseCitation)
-        )
-        == 0
-    )
+    assert db_session.scalar(select(func.count()).select_from(QuestionnaireResponse)) == 0
+    assert db_session.scalar(select(func.count()).select_from(QuestionnaireResponseRevision)) == 0
+    assert db_session.scalar(select(func.count()).select_from(QuestionnaireResponseCitation)) == 0

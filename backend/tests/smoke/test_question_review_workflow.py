@@ -221,10 +221,7 @@ def test_question_review_workflow_over_http(
     assert grounding_body["workspace_id"] == workspace_id
     assert grounding_body["questionnaire_id"] == questionnaire_id
     assert grounding_body["questionnaire_version_id"] == questionnaire_version_id
-    assert (
-        grounding_body["questionnaire_version_question_id"]
-        == questionnaire_version_question_id
-    )
+    assert grounding_body["questionnaire_version_question_id"] == questionnaire_version_question_id
     assert grounding_body["status"] == "MATCHED"
     assert grounding_body["normalized_query"] == question_text
     assert isinstance(grounding_body["results"], list)
@@ -251,9 +248,7 @@ def test_question_review_workflow_over_http(
     assert candidate["content"]
 
     citation_chunk_id = candidate["chunk_id"]
-    assert citation_chunk_id in {
-        citation["chunk_id"] for citation in grounding_body["citations"]
-    }
+    assert citation_chunk_id in {citation["chunk_id"] for citation in grounding_body["citations"]}
 
     answer = "Privileged users are required to use MFA."
     response_path = _response_path(
@@ -281,18 +276,12 @@ def test_question_review_workflow_over_http(
     assert saved_contract.current_revision.answer == answer
     assert saved_body["questionnaire_id"] == questionnaire_id
     assert saved_body["questionnaire_version_id"] == questionnaire_version_id
-    assert (
-        saved_body["questionnaire_version_question_id"]
-        == questionnaire_version_question_id
-    )
+    assert saved_body["questionnaire_version_question_id"] == questionnaire_version_question_id
     assert saved_body["current_revision"]["revision_number"] == 1
     assert saved_body["current_revision"]["status"] == "PROPOSED"
     assert saved_body["current_revision"]["answer"] == answer
     assert len(saved_body["current_revision"]["citations"]) == 1
-    assert (
-        saved_body["current_revision"]["citations"][0]["evidence_chunk_id"]
-        == citation_chunk_id
-    )
+    assert saved_body["current_revision"]["citations"][0]["evidence_chunk_id"] == citation_chunk_id
 
     reloaded_body = _expect_status(
         client.get(response_path, headers=headers),

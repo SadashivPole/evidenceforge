@@ -145,10 +145,7 @@ def test_list_chunks_returns_deterministic_chunk_metadata_and_content(
     )
 
     response = client.get(
-        (
-            f"/workspaces/{workspace.id}/documents/"
-            f"{document_id}/versions/{version_id}/chunks"
-        ),
+        (f"/workspaces/{workspace.id}/documents/{document_id}/versions/{version_id}/chunks"),
         headers=auth_headers(principal),
     )
 
@@ -183,10 +180,7 @@ def test_missing_version_returns_404(
     missing_version_id = uuid.uuid4()
 
     response = client.get(
-        (
-            f"/workspaces/{workspace.id}/documents/"
-            f"{document_id}/versions/{missing_version_id}"
-        ),
+        (f"/workspaces/{workspace.id}/documents/{document_id}/versions/{missing_version_id}"),
         headers=auth_headers(principal),
     )
 
@@ -278,10 +272,7 @@ def test_cross_workspace_chunk_access_returns_404(
     )
 
     response = client.get(
-        (
-            f"/workspaces/{workspace_b.id}/documents/"
-            f"{document_id}/versions/{version_id}/chunks"
-        ),
+        (f"/workspaces/{workspace_b.id}/documents/{document_id}/versions/{version_id}/chunks"),
         headers=auth_headers(owner_b),
     )
 
@@ -327,10 +318,7 @@ def test_viewer_can_read_versions_and_chunks(
     assert version_response.status_code == 200
 
     chunk_response = client.get(
-        (
-            f"/workspaces/{workspace.id}/documents/"
-            f"{document_id}/versions/{version_id}/chunks"
-        ),
+        (f"/workspaces/{workspace.id}/documents/{document_id}/versions/{version_id}/chunks"),
         headers=auth_headers(viewer),
     )
 

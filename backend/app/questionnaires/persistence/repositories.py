@@ -122,8 +122,7 @@ def list_version_questions(
         .where(
             QuestionnaireVersionQuestion.workspace_id == workspace_id,
             QuestionnaireVersionQuestion.questionnaire_id == questionnaire_id,
-            QuestionnaireVersionQuestion.questionnaire_version_id
-            == questionnaire_version_id,
+            QuestionnaireVersionQuestion.questionnaire_version_id == questionnaire_version_id,
         )
         .order_by(
             QuestionnaireVersionQuestion.ordinal,

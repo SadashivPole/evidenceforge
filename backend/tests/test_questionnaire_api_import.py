@@ -148,9 +148,7 @@ def test_questionnaire_xlsx_import_preview(
     assert first["identity_kind"] == "fallback"
     assert first["source_question_id"] is None
     assert first["normalized_sheet_name"] == "Security"
-    assert first["normalized_question_text"] == (
-        "Do you enforce multi-factor authentication?"
-    )
+    assert first["normalized_question_text"] == ("Do you enforce multi-factor authentication?")
     assert first["section_path"] == ["Access Control"]
     assert first["normalized_section_path"] == ["Access Control"]
 

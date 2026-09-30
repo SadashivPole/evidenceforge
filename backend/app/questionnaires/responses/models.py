@@ -23,9 +23,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models import Base
 from app.questionnaires.types import ResponseStatus
 
-_RESPONSE_STATUS_VALUES = ", ".join(
-    f"'{status.value}'" for status in ResponseStatus
-)
+_RESPONSE_STATUS_VALUES = ", ".join(f"'{status.value}'" for status in ResponseStatus)
 
 
 class QuestionnaireResponse(Base):

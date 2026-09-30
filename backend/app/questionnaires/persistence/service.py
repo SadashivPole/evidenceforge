@@ -412,9 +412,7 @@ def persist_import(
         raise
     except SQLAlchemyError as exc:
         db.rollback()
-        raise QuestionnairePersistenceError(
-            "questionnaire import persistence failed"
-        ) from exc
+        raise QuestionnairePersistenceError("questionnaire import persistence failed") from exc
     except Exception:
         db.rollback()
         raise

@@ -45,10 +45,7 @@ def _postgres_reason(database_url: str) -> str | None:
 
 pytestmark = pytest.mark.skipif(
     _postgres_reason(POSTGRES_URL) is not None,
-    reason=(
-        _postgres_reason(POSTGRES_URL)
-        or "PostgreSQL test configuration is invalid"
-    ),
+    reason=(_postgres_reason(POSTGRES_URL) or "PostgreSQL test configuration is invalid"),
 )
 
 

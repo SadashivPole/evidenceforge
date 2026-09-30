@@ -286,10 +286,7 @@ def test_reordering_questions_preserves_logical_ids_but_creates_new_version(
 
     snapshots = db_session.scalars(
         select(QuestionnaireVersionQuestion)
-        .where(
-            QuestionnaireVersionQuestion.questionnaire_version_id
-            == second_result.version_id
-        )
+        .where(QuestionnaireVersionQuestion.questionnaire_version_id == second_result.version_id)
         .order_by(QuestionnaireVersionQuestion.ordinal)
     ).all()
 

@@ -53,16 +53,10 @@ def _postgres_configuration_reason(database_url: str) -> str | None:
         )
 
     if parsed_url.get_backend_name() != "postgresql":
-        return (
-            "requires EVIDENCEFORGE_TEST_DATABASE_URL to use a PostgreSQL "
-            "backend"
-        )
+        return "requires EVIDENCEFORGE_TEST_DATABASE_URL to use a PostgreSQL backend"
 
     if not parsed_url.host:
-        return (
-            "requires EVIDENCEFORGE_TEST_DATABASE_URL to include a PostgreSQL "
-            "hostname"
-        )
+        return "requires EVIDENCEFORGE_TEST_DATABASE_URL to include a PostgreSQL hostname"
 
     if not parsed_url.host.strip(".") or parsed_url.host.lower() in {
         "<host>",
@@ -195,9 +189,7 @@ def _assert_persisted_chunks(
     expected_chunks = chunk_ingestion_result(ingestion)
 
     assert len(persisted_chunks) == len(expected_chunks)
-    assert [chunk.chunk_index for chunk in persisted_chunks] == list(
-        range(len(expected_chunks))
-    )
+    assert [chunk.chunk_index for chunk in persisted_chunks] == list(range(len(expected_chunks)))
 
     source_bytes = ingestion.normalized_text.encode("utf-8")
 
@@ -207,9 +199,9 @@ def _assert_persisted_chunks(
         assert persisted.normalized_start_byte == expected.normalized_start_byte
         assert persisted.normalized_end_byte == expected.normalized_end_byte
         assert persisted.normalized_end_byte > persisted.normalized_start_byte
-        assert persisted.content_hash == hashlib.sha256(
-            persisted.content.encode("utf-8")
-        ).hexdigest()
+        assert (
+            persisted.content_hash == hashlib.sha256(persisted.content.encode("utf-8")).hexdigest()
+        )
         assert source_bytes[
             persisted.normalized_start_byte : persisted.normalized_end_byte
         ] == persisted.content.encode("utf-8")
@@ -223,9 +215,7 @@ def _count_for_document(
 ) -> int:
     return int(
         session.scalar(
-            select(func.count())
-            .select_from(model)
-            .where(model.document_id == document_id)
+            select(func.count()).select_from(model).where(model.document_id == document_id)
         )
         or 0
     )
@@ -236,9 +226,7 @@ def test_concurrent_identical_ingestion_creates_one_version() -> None:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     suffix = _test_suffix("identical")
-    ingestion = _make_ingestion_result(
-        "# Access Control\n\nAuthentication requirements."
-    )
+    ingestion = _make_ingestion_result("# Access Control\n\nAuthentication requirements.")
 
     try:
         with factory() as setup:
@@ -262,12 +250,12 @@ def test_concurrent_identical_ingestion_creates_one_version() -> None:
                 .order_by(EvidenceDocumentVersion.version_number)
             ).all()
             attempts = session.scalars(
-                select(EvidenceIngestionAttempt)
-                .where(EvidenceIngestionAttempt.document_id == document.id)
+                select(EvidenceIngestionAttempt).where(
+                    EvidenceIngestionAttempt.document_id == document.id
+                )
             ).all()
             events = session.scalars(
-                select(AuditEvent)
-                .where(
+                select(AuditEvent).where(
                     AuditEvent.workspace_id == workspace.id,
                     AuditEvent.resource_type == "evidence_document_version",
                 )
@@ -282,11 +270,14 @@ def test_concurrent_identical_ingestion_creates_one_version() -> None:
             assert versions[0].normalized_sha256 == ingestion.normalized_sha256
             assert {result[1] for result in results} == {versions[0].id}
             assert {result[2] for result in results} == {1}
-            assert _count_for_document(
-                session,
-                EvidenceDocumentVersion,
-                document_id=document.id,
-            ) == 1
+            assert (
+                _count_for_document(
+                    session,
+                    EvidenceDocumentVersion,
+                    document_id=document.id,
+                )
+                == 1
+            )
 
             _assert_persisted_chunks(
                 session,
@@ -299,9 +290,7 @@ def test_concurrent_identical_ingestion_creates_one_version() -> None:
                 IngestionOutcome.CREATED.value,
                 IngestionOutcome.DUPLICATE.value,
             ]
-            assert {attempt.id for attempt in attempts} == {
-                result[3] for result in results
-            }
+            assert {attempt.id for attempt in attempts} == {result[3] for result in results}
             assert {attempt.version_id for attempt in attempts} == {versions[0].id}
             assert {attempt.workspace_id for attempt in attempts} == {workspace.id}
 
@@ -311,10 +300,7 @@ def test_concurrent_identical_ingestion_creates_one_version() -> None:
                 "evidence.ingestion.duplicate",
             ]
             assert {event.resource_id for event in events} == {str(versions[0].id)}
-            assert all(
-                event.event_metadata["document_id"] == str(document.id)
-                for event in events
-            )
+            assert all(event.event_metadata["document_id"] == str(document.id) for event in events)
     finally:
         engine.dispose()
 
@@ -324,9 +310,7 @@ def test_concurrent_changed_ingestion_allocates_versions_serially() -> None:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     suffix = _test_suffix("changed")
-    first_ingestion = _make_ingestion_result(
-        "# Access Control\n\nAuthentication requirements."
-    )
+    first_ingestion = _make_ingestion_result("# Access Control\n\nAuthentication requirements.")
     second_ingestion = _make_ingestion_result(
         "# Access Control\n\nPhishing-resistant authentication requirements."
     )
@@ -353,12 +337,12 @@ def test_concurrent_changed_ingestion_allocates_versions_serially() -> None:
                 .order_by(EvidenceDocumentVersion.version_number)
             ).all()
             attempts = session.scalars(
-                select(EvidenceIngestionAttempt)
-                .where(EvidenceIngestionAttempt.document_id == document.id)
+                select(EvidenceIngestionAttempt).where(
+                    EvidenceIngestionAttempt.document_id == document.id
+                )
             ).all()
             events = session.scalars(
-                select(AuditEvent)
-                .where(
+                select(AuditEvent).where(
                     AuditEvent.workspace_id == workspace.id,
                     AuditEvent.resource_type == "evidence_document_version",
                 )
@@ -372,9 +356,7 @@ def test_concurrent_changed_ingestion_allocates_versions_serially() -> None:
             assert len(versions) == 2
             assert [version.version_number for version in versions] == [1, 2]
             assert len({version.version_number for version in versions}) == 2
-            assert {
-                version.normalized_sha256 for version in versions
-            } == {
+            assert {version.normalized_sha256 for version in versions} == {
                 first_ingestion.normalized_sha256,
                 second_ingestion.normalized_sha256,
             }
@@ -391,20 +373,14 @@ def test_concurrent_changed_ingestion_allocates_versions_serially() -> None:
                 )
 
             assert len(attempts) == 2
-            assert {
-                attempt.outcome for attempt in attempts
-            } == {IngestionOutcome.CREATED.value}
-            assert {attempt.id for attempt in attempts} == {
-                result[3] for result in results
-            }
+            assert {attempt.outcome for attempt in attempts} == {IngestionOutcome.CREATED.value}
+            assert {attempt.id for attempt in attempts} == {result[3] for result in results}
             assert {attempt.version_id for attempt in attempts} == {
                 version.id for version in versions
             }
             assert {attempt.workspace_id for attempt in attempts} == {workspace.id}
             assert len(events) == 2
-            assert {
-                event.action for event in events
-            } == {"evidence.ingestion.created"}
+            assert {event.action for event in events} == {"evidence.ingestion.created"}
             assert {event.resource_id for event in events} == {
                 str(version.id) for version in versions
             }
@@ -468,12 +444,14 @@ def test_concurrent_cross_workspace_access_does_not_persist_foreign_document() -
 
         with factory() as session:
             versions = session.scalars(
-                select(EvidenceDocumentVersion)
-                .where(EvidenceDocumentVersion.document_id == document.id)
+                select(EvidenceDocumentVersion).where(
+                    EvidenceDocumentVersion.document_id == document.id
+                )
             ).all()
             attempts = session.scalars(
-                select(EvidenceIngestionAttempt)
-                .where(EvidenceIngestionAttempt.document_id == document.id)
+                select(EvidenceIngestionAttempt).where(
+                    EvidenceIngestionAttempt.document_id == document.id
+                )
             ).all()
             other_workspace_attempts = session.scalars(
                 select(EvidenceIngestionAttempt).where(

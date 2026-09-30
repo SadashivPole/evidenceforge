@@ -41,16 +41,10 @@ def _postgres_configuration_reason(database_url: str) -> str | None:
         )
 
     if parsed_url.get_backend_name() != "postgresql":
-        return (
-            "requires EVIDENCEFORGE_TEST_DATABASE_URL to use a PostgreSQL "
-            "backend"
-        )
+        return "requires EVIDENCEFORGE_TEST_DATABASE_URL to use a PostgreSQL backend"
 
     if not parsed_url.host:
-        return (
-            "requires EVIDENCEFORGE_TEST_DATABASE_URL to include a PostgreSQL "
-            "hostname"
-        )
+        return "requires EVIDENCEFORGE_TEST_DATABASE_URL to include a PostgreSQL hostname"
 
     if not parsed_url.host.strip(".") or parsed_url.host.lower() in {
         "<host>",
@@ -125,9 +119,7 @@ def _count(
 ) -> int:
     return int(
         session.scalar(
-            select(func.count())
-            .select_from(model)
-            .where(model.workspace_id == workspace_id)
+            select(func.count()).select_from(model).where(model.workspace_id == workspace_id)
         )
         or 0
     )
@@ -280,9 +272,7 @@ def test_concurrent_changed_imports_allocate_versions_serially() -> None:
 
             assert len(versions) == 2
             assert sorted(version_numbers) == [1, 2]
-            assert sorted(
-                version.version_number for version in versions
-            ) == [1, 2]
+            assert sorted(version.version_number for version in versions) == [1, 2]
             assert (
                 _count(
                     session,
