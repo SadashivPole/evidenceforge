@@ -2,34 +2,42 @@
 
 EvidenceForge is a local-first workbench for building security questionnaire workflows around approved evidence.
 
-The project is intentionally designed around a bounded workflow:
+The project is intentionally designed around a bounded target workflow:
 
 **approved evidence → questionnaire → grounded response → citations → human review**
 
+The current implementation provides the evidence, questionnaire, persistence, provenance, retrieval, and evaluation foundations for that workflow. It does not yet provide an end-to-end response-generation, reviewer-decision, or export workflow.
+
 EvidenceForge is designed to reduce the effort required to organize evidence and produce defensible questionnaire responses without turning unsupported information into confident answers.
 
-It is not intended to be a generic chatbot, autonomous compliance authority, or automatic questionnaire submitter.
+It is not intended to be a generic chatbot, autonomous compliance authority, autonomous agent, or automatic questionnaire submitter.
 
 ---
 
 ## Current project status
 
-EvidenceForge has progressed beyond the initial security-boundary prototype and now includes a persistence-backed questionnaire response layer.
+At commit `aa8858c`, EvidenceForge has completed the security-boundary, evidence, questionnaire, response-persistence, review-foundation, retrieval, and evaluation slices.
 
-The current implementation focuses on:
+The current implementation includes:
 
-- deterministic data contracts;
-- workspace isolation;
-- database integrity;
-- evidence provenance;
+- workspace and membership security boundaries;
+- bearer authentication;
+- authorization and workspace isolation;
+- audit events;
+- evidence documents, immutable versions, and chunks;
+- evidence provenance and normalization;
+- deterministic questionnaire XLSX processing;
 - questionnaire persistence;
 - immutable questionnaire response history;
-- authorization;
-- PostgreSQL concurrency safety;
-- migration reproducibility; and
-- automated regression testing.
+- citation persistence and provenance;
+- PostgreSQL concurrency handling;
+- question review/workbench foundations;
+- deterministic lexical retrieval;
+- Phase 2A retrieval evaluation;
+- Phase 2B evaluation hardening; and
+- a deterministic 60-case evaluation corpus.
 
-The current response-persistence slice does not implement autonomous answer generation or unrestricted LLM workflows.
+The current implementation measures retrieval and evidence-state behavior. It does not yet implement a response/generation layer that produces answers, reviewer decisions, or true abstention outcomes.
 
 ---
 
@@ -88,6 +96,42 @@ The questionnaire layer provides:
 The identity and hashing contracts intentionally avoid using raw XLSX ZIP bytes or filenames as semantic identity.
 
 Question identity is based on deterministic normalized questionnaire content and explicit source identifiers when available.
+
+---
+
+### Retrieval and evaluation foundations
+
+EvidenceForge currently provides deterministic lexical retrieval over authorized evidence candidates. Phase 2A established the retrieval baseline, and Phase 2B hardened the evaluation semantics without changing production retrieval or the 60-case corpus.
+
+The benchmark corpus contains 60 deterministic cases:
+
+```text
+SUPPORTED: 20
+AMBIGUOUS: 10
+INSUFFICIENT_EVIDENCE: 10
+CONFLICTING_STALE: 10
+MALICIOUS_INJECTED: 10
+```
+
+The current measured results are benchmark results for retrieval and evidence-state handling, not overall product accuracy:
+
+```text
+Recall@5:                    0.8333333333333334
+nDCG@5:                      0.9219567263864729
+nDCG@10:                     0.9219567263864729
+Evidence-state match rate:  1.0
+Conflict/Stale complete rate: 1.0
+Injection content inert rate: 1.0
+Injection candidates surfaced: 10
+Cross-workspace leakage count: 0
+Cross-workspace leakage rate: 0.0
+```
+
+`evidence_state_match` measures whether the retrieved evidence state matches the expected category-specific condition. It is not answer accuracy and is not an end-to-end abstention metric.
+
+**Correct Abstention: N/A — response/generation layer not implemented**
+
+Injection-like content is evaluated as inert evidence. End-to-end Injection Escape is also unavailable because no generation, tool, agent, or answer layer exists.
 
 ---
 
@@ -414,7 +458,7 @@ The PostgreSQL response concurrency tests are included in the automated validati
 The current repository has been validated with:
 
 ```text
-281 tests passed
+302 tests passed
 8 tests skipped
 1 warning
 ```
@@ -436,6 +480,8 @@ Additional validation performed during the questionnaire response work includes:
 - successful upgrade from `0005` back to `0006`.
 
 The current test environment reports one non-fatal Starlette/AnyIO deprecation warning from the installed dependency stack.
+
+No GitHub Actions result is asserted here for commit `aa8858c`; the counts above are the locally validated repository state.
 
 Validation results describe the tested repository state and should not be interpreted as a production-security certification.
 
@@ -517,7 +563,7 @@ python -m pytest -q
 For the current validated repository state:
 
 ```text
-281 passed
+302 passed
 8 skipped
 1 warning
 ```
@@ -681,6 +727,8 @@ EvidenceForge is:
 - a deterministic questionnaire import and persistence system;
 - a questionnaire response and revision system;
 - a provenance-aware citation system;
+- question review/workbench foundations;
+- a deterministic lexical retrieval and evaluation system; and
 - a foundation for future grounded drafting and human review workflows.
 
 EvidenceForge is not:
@@ -720,15 +768,23 @@ Feature velocity is intentionally secondary to correctness and auditability.
 
 ## Current architectural boundaries
 
-The current response-persistence implementation intentionally avoids:
+The current implementation intentionally avoids treating future capabilities as implemented. The following are not yet available as an end-to-end workflow:
 
-- automatic answer generation;
+- semantic/vector retrieval;
+- pgvector integration;
+- reciprocal-rank fusion (RRF);
+- bounded LLM generation;
+- generation schema validation;
+- semantic citation or grounding validation;
+- true end-to-end correct-abstention measurement;
+- end-to-end injection-escape measurement;
+- final human-reviewed export workflow;
 - hidden LLM calls;
 - unrestricted RAG;
 - automatic questionnaire submission;
 - autonomous tool execution;
 - autonomous network access;
-- automatic changes to evidence;
+- automatic changes to evidence; and
 - automatic changes to questionnaire definitions.
 
 The current response layer is focused on:
@@ -745,9 +801,13 @@ authorization
 revision history
 ```
 
+The current retrieval layer is deterministic and lexical. It is evaluated as retrieval and evidence-state behavior, not as generated-answer quality or end-to-end reviewer behavior.
+
 ---
 
 ## Future grounded workflow
+
+The following is a future target workflow, not a claim about the current implementation:
 
 A later end-to-end workflow may evolve toward:
 
@@ -833,9 +893,17 @@ Those concepts should only be treated as implemented once the corresponding work
 
 ## Explicitly deferred work
 
-The following areas are outside the current response-persistence slice:
+The following areas are outside the current implemented slice:
 
-- automatic answer generation;
+- semantic/vector retrieval;
+- pgvector integration;
+- reciprocal-rank fusion (RRF);
+- bounded LLM generation;
+- generation schema validation;
+- semantic citation or grounding validation;
+- true end-to-end correct-abstention measurement;
+- end-to-end injection-escape measurement;
+- final human-reviewed export workflow;
 - unrestricted web crawling;
 - Slack integrations;
 - Jira integrations;
@@ -845,7 +913,7 @@ The following areas are outside the current response-persistence slice:
 - automatic questionnaire submission;
 - enterprise SSO/SCIM;
 - Kubernetes deployment;
-- model fine-tuning;
+- model fine-tuning; and
 - autonomous provisioning.
 
 The product and technical boundaries are documented in:
@@ -858,21 +926,21 @@ docs/architecture.md
 
 ---
 
-## Engineering roadmap
+## Next phase
 
-The current engineering sequence is:
+The immediate next implementation phase is:
+
+**Phase 2C — Hybrid Retrieval**
+
+The intended comparison is:
 
 ```text
-Phase 1K response persistence
-        ↓
-README and repository documentation
-        ↓
-Continuous integration
-        ↓
-Final release validation
-        ↓
-Next bounded implementation slice
+lexical-only
+semantic-only
+lexical + semantic + RRF
 ```
+
+The purpose is to measure whether semantic retrieval actually improves the 60-case benchmark before productionizing fusion. Phase 2C is planned work; semantic retrieval, pgvector, and RRF are not implemented by this documentation update.
 
 The next implementation areas should be introduced incrementally and validated independently rather than combining retrieval, generation, integrations, and automation into a single large change.
 
@@ -886,7 +954,10 @@ Current known limitations include:
 - PostgreSQL integration tests require the dedicated PostgreSQL test environment;
 - response persistence relies on the trusted API/service boundary for the explicit workspace role passed into mutation operations;
 - the evidence document/version/chunk foreign-key structure could be hardened further with stronger cross-table database-level evidence-chain constraints in a future phase;
-- advanced retrieval and LLM drafting are not part of the current response-persistence slice.
+- semantic/vector retrieval, pgvector, and reciprocal-rank fusion are not implemented;
+- bounded LLM generation, generation schema validation, and semantic citation/grounding validation are not implemented;
+- true end-to-end correct-abstention and injection-escape measurement are unavailable; and
+- the final human-reviewed export workflow is not implemented.
 
 These limitations are documented engineering boundaries, not guarantees about every deployment environment.
 
