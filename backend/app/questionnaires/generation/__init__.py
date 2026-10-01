@@ -17,6 +17,17 @@ from app.questionnaires.generation.errors import (
     GenerationStatusValidationError,
     GenerationWorkspaceMismatchError,
 )
+from app.questionnaires.generation.projection import (
+    ModelEvidenceItem,
+    ModelGenerationInput,
+    project_evidence_item,
+    project_generation_context_to_model_input,
+)
+from app.questionnaires.generation.provider import (
+    GenerationProvider,
+    MockEvaluationProvider,
+    ProviderConfig,
+)
 from app.questionnaires.generation.schemas import GeneratedDraftPayload
 from app.questionnaires.generation.types import (
     GenerationContext,
@@ -42,12 +53,19 @@ __all__ = [
     "GenerationEvidenceItem",
     "GenerationOutputLengthError",
     "GenerationPayloadMalformedError",
+    "GenerationProvider",
     "GenerationStatusValidationError",
     "GenerationWorkspaceMismatchError",
     "MAX_ANSWER_CHARACTERS",
     "MAX_CITED_HANDLES",
     "MAX_UNCERTAINTY_NOTES_CHARACTERS",
+    "MockEvaluationProvider",
+    "ModelEvidenceItem",
+    "ModelGenerationInput",
+    "ProviderConfig",
     "ValidatedDraftResponse",
     "build_generation_context",
+    "project_evidence_item",
+    "project_generation_context_to_model_input",
     "validate_generated_draft",
 ]
