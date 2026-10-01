@@ -190,7 +190,7 @@ def test_grounding_matches_with_exact_provenance_and_repeats_identically(
     assert first == second
     assert first.status is GroundingStatus.MATCHED
     assert first.normalized_query == "MFA is required for privileged access"
-    assert first.search_version == "text-search-v1"
+    assert first.search_version == "hybrid-rrf-v1"
     assert len(first.results) == 1
     assert first.results[0].candidate.chunk_id == chunk.id
     assert first.citations == (
@@ -233,6 +233,7 @@ def test_grounding_returns_no_matches_without_fabricating_citations(
     )
 
     assert result.status is GroundingStatus.NO_MATCHES
+    assert result.search_version == "hybrid-rrf-v1"
     assert result.results == ()
     assert result.citations == ()
 

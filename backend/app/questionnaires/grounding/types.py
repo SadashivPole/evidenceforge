@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.evidence.citations.types import EvidenceCitation
+from app.evidence.hybrid.types import HybridSearchResult
 from app.evidence.search.types import SearchResult
 
 
@@ -40,5 +41,5 @@ class GroundingResult:
     search_version: str
     result_limit: int
     status: GroundingStatus
-    results: tuple[SearchResult, ...]
+    results: tuple[SearchResult | HybridSearchResult, ...]
     citations: tuple[EvidenceCitation, ...]

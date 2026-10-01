@@ -239,10 +239,13 @@ class QuestionnaireGroundingSearchResultResponse(BaseModel):
     """One ranked deterministic grounding search result."""
 
     candidate: QuestionnaireGroundingCandidateResponse
-    score: int
-    matched_terms: list[str]
-    exact_phrase_match: bool
-    occurrence_count: int
+    score: float
+    matched_terms: list[str] = Field(default_factory=list)
+    exact_phrase_match: bool = False
+    occurrence_count: int = 0
+    rrf_score: float | None = None
+    lexical_rank: int | None = None
+    semantic_rank: int | None = None
 
 
 class QuestionnaireGroundingCitationResponse(BaseModel):

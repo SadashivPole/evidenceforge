@@ -281,6 +281,9 @@ def _grounding_response(
                 matched_terms=list(search_result.matched_terms),
                 exact_phrase_match=search_result.exact_phrase_match,
                 occurrence_count=search_result.occurrence_count,
+                rrf_score=getattr(search_result, "rrf_score", None),
+                lexical_rank=getattr(search_result, "lexical_rank", None),
+                semantic_rank=getattr(search_result, "semantic_rank", None),
             )
             for search_result in result.results
         ],

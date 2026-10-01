@@ -77,8 +77,10 @@ def test_grounding_api_returns_matched_schema_and_provenance(
 
     assert response.status_code == 200
     body = response.json()
+    assert body["search_version"] == "hybrid-rrf-v1"
     validated = QuestionnaireGroundingResponse.model_validate(body)
     assert validated.status.value == "MATCHED"
+    assert validated.search_version == "hybrid-rrf-v1"
     assert validated.workspace_id == workspace.id
     assert validated.questionnaire_id == version.questionnaire_id
     assert validated.questionnaire_version_id == version.id
@@ -125,10 +127,57 @@ def test_grounding_api_returns_no_matches(
     )
 
     assert response.status_code == 200
-    body = QuestionnaireGroundingResponse.model_validate(response.json())
+    body_json = response.json()
+    assert body_json["search_version"] == "hybrid-rrf-v1"
+    body = QuestionnaireGroundingResponse.model_validate(body_json)
     assert body.status.value == "NO_MATCHES"
+    assert body.search_version == "hybrid-rrf-v1"
     assert body.results == []
     assert body.citations == []
+
+
+def test_grounding_api_search_version_provenance_is_hybrid_rrf_v1(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    principal = create_principal(
+        db_session,
+        email="grounding-search-version@example.com",
+        display_name="Grounding Search Version Principal",
+    )
+    workspace = create_workspace_with_owner(
+        db_session,
+        principal,
+        name="Grounding Search Version Workspace",
+    )
+    version, question = _import_one_question(
+        db_session,
+        workspace_id=workspace.id,
+        actor_user_id=principal.user.id,
+        question_text="Access control and MFA",
+    )
+    _create_chunk(
+        db_session,
+        workspace_id=workspace.id,
+        actor_user_id=principal.user.id,
+        content="Access control requires mandatory MFA across systems.",
+    )
+
+    response = client.get(
+        _grounding_path(
+            workspace_id=workspace.id,
+            questionnaire_id=version.questionnaire_id,
+            version_id=version.id,
+            question_id=question.id,
+        ),
+        headers=auth_headers(principal),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["search_version"] == "hybrid-rrf-v1"
+    validated = QuestionnaireGroundingResponse.model_validate(body)
+    assert validated.search_version == "hybrid-rrf-v1"
 
 
 def test_grounding_api_requires_authentication(

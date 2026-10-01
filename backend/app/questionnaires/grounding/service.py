@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.evidence.citations.service import citation_from_candidate
 from app.evidence.citations.types import EvidenceCitation
-from app.evidence.persistence.search_repository import list_search_candidates
+from app.evidence.hybrid.service import HybridRetriever
 from app.evidence.search.policy import DEFAULT_SEARCH_POLICY, SearchPolicy
-from app.evidence.search.service import normalize_query, search_chunks
+from app.evidence.search.service import normalize_query
 from app.questionnaires.grounding.errors import (
     GroundingQueryValidationError,
     GroundingQuestionNotFoundError,
@@ -83,9 +83,11 @@ def ground_question(
     questionnaire_version_question_id: uuid.UUID,
     policy: SearchPolicy = DEFAULT_GROUNDING_POLICY,
     result_limit: int | None = None,
+    hybrid_retriever: HybridRetriever | None = None,
 ) -> GroundingResult:
     """Ground one authorized questionnaire question against persisted evidence.
 
+    Uses production hybrid retrieval (lexical + semantic + RRF) over authorized evidence.
     This function performs only reads. It does not create questionnaire responses,
     revisions, citations, or any other persisted records.
     """
@@ -105,19 +107,19 @@ def ground_question(
     )
     effective_limit = policy.default_limit if result_limit is None else result_limit
 
+    retriever = hybrid_retriever or HybridRetriever()
+
     try:
-        candidates = list_search_candidates(
+        results = retriever.search(
             db,
+            query=normalized_query,
             workspace_id=workspace_id,
-        )
-        results = search_chunks(
-            candidates,
-            normalized_query,
-            policy=policy,
             limit=effective_limit,
         )
     except (TypeError, ValueError) as exc:
         raise GroundingQueryValidationError("Grounding search input is invalid") from exc
+    except Exception as exc:
+        raise GroundingQueryValidationError(f"Grounding search failed: {exc}") from exc
 
     citations: tuple[EvidenceCitation, ...] = tuple(
         citation_from_candidate(
@@ -133,7 +135,7 @@ def ground_question(
         questionnaire_version_id=questionnaire_version_id,
         questionnaire_version_question_id=questionnaire_version_question_id,
         normalized_query=normalized_query,
-        search_version=policy.search_version,
+        search_version=retriever.config.search_version,
         result_limit=effective_limit,
         status=status,
         results=tuple(results),
