@@ -1,6 +1,6 @@
 # Phase 2C Task 7A: EvidenceChunkEmbedding Persistence Foundation
 
-- **Status:** Persistence foundation implementation added; real PostgreSQL/pgvector validation pending in this environment
+- **Status:** Persistence foundation implementation validated against real PostgreSQL 16 + pgvector 0.8.6
 - **Migration:** `0007_evidence_chunk_embeddings`
 - **Scope:** Additive PostgreSQL/pgvector persistence for attributable evidence-chunk embeddings
 - **Production behavior:** Existing lexical retrieval remains unchanged
@@ -250,37 +250,53 @@ Future semantic retrieval must apply workspace filtering on the embedding relati
 
 ## 10. Validation evidence
 
-The full repository validation remains required:
+The persistence foundation was validated against the Windows PostgreSQL Compose service using the dedicated database:
 
 ```text
-python -m compileall -q backend
-ruff check backend
-ruff format --check backend
-python -m pytest -q
+evidenceforge_test
 ```
 
-The focused PostgreSQL migration/integrity test is:
+The PostgreSQL integration test ran inside the temporary validation container with `EVIDENCEFORGE_TEST_DATABASE_URL` configured:
 
 ```text
-python -m pytest backend/tests/test_evidence_chunk_embeddings_postgres.py -q
+python -m pytest tests/test_evidence_chunk_embeddings_postgres.py -q
 ```
 
-When `EVIDENCEFORGE_TEST_DATABASE_URL` is configured to a dedicated PostgreSQL 16 + pgvector 0.8.6 database, that test exercises the migration against the real extension and verifies `vector(384)`. Without that environment, it skips explicitly rather than faking PostgreSQL behavior.
-
-The validation environment for this checkpoint did not provide `EVIDENCEFORGE_TEST_DATABASE_URL`, and Docker/PostgreSQL was not available. Therefore the real PostgreSQL migration test reported one explicit skip and the migration was not claimed as exercised against PostgreSQL in this environment.
-
-Observed local validation:
+Validation results:
 
 ```text
-Focused persistence tests: 7 passed, 1 warning
-PostgreSQL migration test: 1 skipped, 1 warning
-Full suite:               321 passed, 29 skipped, 1 warning
-Ruff check:               All checks passed!
-Ruff format:              113 files already formatted
-Compileall:               passed
+PostgreSQL 16:
+PASS
+
+pgvector extension:
+0.8.6
+
+Alembic revision:
+0007_evidence_chunk_embeddings
+
+Embedding column:
+vector(384)
+
+Real PostgreSQL migration/integrity validation:
+PASS
+
+PostgreSQL migration/integrity test:
+1 passed
+
+Full repository suite:
+322 passed, 28 skipped, 1 warning
+
+Ruff:
+All checks passed
+
+Ruff format:
+113 files already formatted
+
+Compileall:
+PASS
 ```
 
-The remaining warning is the existing Starlette/httpx deprecation warning. No semantic retrieval, embedding generation, HNSW performance, or RRF result is claimed by this checkpoint.
+The remaining warning is the non-fatal `Starlette/httpx deprecation warning`. No semantic retrieval, embedding generation, HNSW performance, or RRF result is claimed by this checkpoint.
 
 ## 11. Next step
 
