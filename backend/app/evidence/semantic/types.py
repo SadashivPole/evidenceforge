@@ -10,7 +10,7 @@ from app.evidence.search.types import SearchChunkCandidate
 
 @dataclass(frozen=True, slots=True)
 class SemanticSearchResult:
-    """One attributable semantic retrieval candidate with similarity and provenance."""
+    """One attributable semantic retrieval candidate with similarity, freshness, and provenance."""
 
     chunk_id: uuid.UUID
     document_id: uuid.UUID
@@ -30,6 +30,26 @@ class SemanticSearchResult:
     model_version: str
     configuration_hash: str
     embedding_dimension: int
+    document_status: str = "active"
+    latest_document_version_number: int | None = None
+    is_latest_document_version: bool | None = None
+    conflict_group_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.latest_document_version_number is not None
+            and self.is_latest_document_version is None
+        ):
+            object.__setattr__(
+                self,
+                "is_latest_document_version",
+                self.version_number == self.latest_document_version_number,
+            )
+
+    @property
+    def document_version_number(self) -> int:
+        """Authoritative persisted document version number."""
+        return self.version_number
 
     @property
     def candidate(self) -> SearchChunkCandidate:
@@ -50,4 +70,8 @@ class SemanticSearchResult:
             normalized_end_byte=self.normalized_end_byte,
             section_label=self.section_label,
             page_number=self.page_number,
+            document_status=self.document_status,
+            latest_document_version_number=self.latest_document_version_number,
+            is_latest_document_version=self.is_latest_document_version,
+            conflict_group_id=self.conflict_group_id,
         )

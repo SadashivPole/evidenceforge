@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.evidence.search.types import SearchChunkCandidate
@@ -20,9 +20,30 @@ def list_search_candidates(
 ) -> tuple[SearchChunkCandidate, ...]:
     """Load workspace-scoped persisted chunks as immutable search candidates.
 
+    Enriches candidates with authoritative document version and freshness metadata:
+    - document_version_number: persisted candidate version number
+    - latest_document_version_number: authoritative latest version number for the document
+    - is_latest_document_version: boolean indicating if this candidate is from the latest version
+    - document_status: persisted document status (e.g. "active")
+    - conflict_group_id: None (explicit deferred field)
+
     Optional document/version filters narrow the search scope while preserving
     workspace isolation.
     """
+
+    latest_version_subq = (
+        select(
+            EvidenceDocumentVersion.document_id.label("doc_id"),
+            func.max(EvidenceDocumentVersion.version_number).label("latest_version_number"),
+        )
+        .join(
+            EvidenceDocument,
+            EvidenceDocument.id == EvidenceDocumentVersion.document_id,
+        )
+        .where(EvidenceDocument.workspace_id == workspace_id)
+        .group_by(EvidenceDocumentVersion.document_id)
+        .subquery()
+    )
 
     statement = (
         select(
@@ -37,6 +58,8 @@ def list_search_candidates(
             EvidenceChunk.normalized_end_byte,
             EvidenceChunk.section_label,
             EvidenceChunk.page_number,
+            EvidenceDocument.status,
+            latest_version_subq.c.latest_version_number,
         )
         .join(
             EvidenceDocumentVersion,
@@ -45,6 +68,10 @@ def list_search_candidates(
         .join(
             EvidenceDocument,
             EvidenceDocument.id == EvidenceDocumentVersion.document_id,
+        )
+        .join(
+            latest_version_subq,
+            latest_version_subq.c.doc_id == EvidenceDocument.id,
         )
         .where(EvidenceDocument.workspace_id == workspace_id)
     )
@@ -77,6 +104,14 @@ def list_search_candidates(
             normalized_end_byte=normalized_end_byte,
             section_label=section_label,
             page_number=page_number,
+            document_status=doc_status or "active",
+            latest_document_version_number=latest_version_number,
+            is_latest_document_version=(
+                version_number == latest_version_number
+                if latest_version_number is not None
+                else None
+            ),
+            conflict_group_id=None,
         )
         for (
             chunk_id,
@@ -90,5 +125,7 @@ def list_search_candidates(
             normalized_end_byte,
             section_label,
             page_number,
+            doc_status,
+            latest_version_number,
         ) in rows
     )

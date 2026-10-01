@@ -276,6 +276,13 @@ def _grounding_response(
                     normalized_end_byte=search_result.candidate.normalized_end_byte,
                     section_label=search_result.candidate.section_label,
                     page_number=search_result.candidate.page_number,
+                    document_status=search_result.candidate.document_status,
+                    document_version_number=search_result.candidate.document_version_number,
+                    latest_document_version_number=(
+                        search_result.candidate.latest_document_version_number
+                    ),
+                    is_latest_document_version=search_result.candidate.is_latest_document_version,
+                    conflict_group_id=search_result.candidate.conflict_group_id,
                 ),
                 score=search_result.score,
                 matched_terms=list(search_result.matched_terms),

@@ -233,6 +233,11 @@ class QuestionnaireGroundingCandidateResponse(BaseModel):
     normalized_end_byte: int
     section_label: str | None
     page_number: int | None
+    document_status: str | None = "active"
+    document_version_number: int | None = None
+    latest_document_version_number: int | None = None
+    is_latest_document_version: bool | None = None
+    conflict_group_id: str | None = None
 
 
 class QuestionnaireGroundingSearchResultResponse(BaseModel):

@@ -11,7 +11,7 @@ from app.evidence.semantic.types import SemanticSearchResult
 
 @dataclass(frozen=True, slots=True)
 class HybridSearchResult:
-    """One fused evidence candidate with RRF score and component provenance."""
+    """One fused evidence candidate with RRF score, freshness, and component provenance."""
 
     candidate: SearchChunkCandidate
     rrf_score: float
@@ -36,6 +36,26 @@ class HybridSearchResult:
     @property
     def version_number(self) -> int:
         return self.candidate.version_number
+
+    @property
+    def document_version_number(self) -> int:
+        return self.candidate.document_version_number
+
+    @property
+    def latest_document_version_number(self) -> int | None:
+        return self.candidate.latest_document_version_number
+
+    @property
+    def is_latest_document_version(self) -> bool | None:
+        return self.candidate.is_latest_document_version
+
+    @property
+    def document_status(self) -> str:
+        return self.candidate.document_status
+
+    @property
+    def conflict_group_id(self) -> str | None:
+        return self.candidate.conflict_group_id
 
     @property
     def chunk_index(self) -> int:

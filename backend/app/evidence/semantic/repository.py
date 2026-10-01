@@ -6,7 +6,7 @@ import math
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -57,6 +57,10 @@ def query_semantic_candidates(
     Filtering by authorized workspace_id occurs at the database query boundary
     BEFORE ordering and LIMIT. Unauthorized workspace candidates are never selected,
     ranked, or returned.
+
+    Authoritative Freshness Enrichment:
+    Computes latest document version number within the authorized workspace via subquery
+    and attaches is_latest_document_version, latest_document_version_number, and document_status.
     """
 
     if workspace_id is None or not isinstance(workspace_id, uuid.UUID):
@@ -85,6 +89,21 @@ def query_semantic_candidates(
             top_k=effective_top_k,
         )
 
+    # Subquery for authoritative latest version number per document in authorized workspace
+    latest_version_subq = (
+        select(
+            EvidenceDocumentVersion.document_id.label("doc_id"),
+            func.max(EvidenceDocumentVersion.version_number).label("latest_version_number"),
+        )
+        .join(
+            EvidenceDocument,
+            EvidenceDocument.id == EvidenceDocumentVersion.document_id,
+        )
+        .where(EvidenceDocument.workspace_id == workspace_id)
+        .group_by(EvidenceDocumentVersion.document_id)
+        .subquery()
+    )
+
     # Production PostgreSQL / pgvector query path
     dist_expr = EvidenceChunkEmbedding.embedding.cosine_distance(list(validated_vector)).label(
         "distance"
@@ -108,6 +127,8 @@ def query_semantic_candidates(
             EvidenceChunkEmbedding.model_version,
             EvidenceChunkEmbedding.configuration_hash,
             EvidenceChunkEmbedding.embedding_dimension,
+            EvidenceDocument.status.label("document_status"),
+            latest_version_subq.c.latest_version_number,
             dist_expr,
         )
         .join(
@@ -121,6 +142,10 @@ def query_semantic_candidates(
         .join(
             EvidenceDocument,
             EvidenceDocument.id == EvidenceDocumentVersion.document_id,
+        )
+        .join(
+            latest_version_subq,
+            latest_version_subq.c.doc_id == EvidenceDocument.id,
         )
         .where(
             EvidenceChunkEmbedding.workspace_id == workspace_id,
@@ -179,6 +204,14 @@ def query_semantic_candidates(
                 model_version=row.model_version,
                 configuration_hash=row.configuration_hash,
                 embedding_dimension=row.embedding_dimension,
+                document_status=row.document_status or "active",
+                latest_document_version_number=row.latest_version_number,
+                is_latest_document_version=(
+                    row.version_number == row.latest_version_number
+                    if row.latest_version_number is not None
+                    else None
+                ),
+                conflict_group_id=None,
             )
         )
 
@@ -196,6 +229,20 @@ def _query_semantic_candidates_sqlite(
     top_k: int,
 ) -> tuple[SemanticSearchResult, ...]:
     """Fallback query handler for SQLite test environments without native pgvector operator."""
+
+    latest_version_subq = (
+        select(
+            EvidenceDocumentVersion.document_id.label("doc_id"),
+            func.max(EvidenceDocumentVersion.version_number).label("latest_version_number"),
+        )
+        .join(
+            EvidenceDocument,
+            EvidenceDocument.id == EvidenceDocumentVersion.document_id,
+        )
+        .where(EvidenceDocument.workspace_id == workspace_id)
+        .group_by(EvidenceDocumentVersion.document_id)
+        .subquery()
+    )
 
     statement = (
         select(
@@ -216,6 +263,8 @@ def _query_semantic_candidates_sqlite(
             EvidenceChunkEmbedding.configuration_hash,
             EvidenceChunkEmbedding.embedding_dimension,
             EvidenceChunkEmbedding.embedding,
+            EvidenceDocument.status.label("document_status"),
+            latest_version_subq.c.latest_version_number,
         )
         .join(
             EvidenceChunk,
@@ -228,6 +277,10 @@ def _query_semantic_candidates_sqlite(
         .join(
             EvidenceDocument,
             EvidenceDocument.id == EvidenceDocumentVersion.document_id,
+        )
+        .join(
+            latest_version_subq,
+            latest_version_subq.c.doc_id == EvidenceDocument.id,
         )
         .where(
             EvidenceChunkEmbedding.workspace_id == workspace_id,
@@ -287,6 +340,14 @@ def _query_semantic_candidates_sqlite(
             model_version=row.model_version,
             configuration_hash=row.configuration_hash,
             embedding_dimension=row.embedding_dimension,
+            document_status=row.document_status or "active",
+            latest_document_version_number=row.latest_version_number,
+            is_latest_document_version=(
+                row.version_number == row.latest_version_number
+                if row.latest_version_number is not None
+                else None
+            ),
+            conflict_group_id=None,
         )
         scored_rows.append((distance, row.chunk_id, result))
 
