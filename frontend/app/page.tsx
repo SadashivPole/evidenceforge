@@ -33,6 +33,11 @@ type GroundingCandidate = {
   normalized_end_byte: number;
   section_label: string | null;
   page_number: number | null;
+  document_status?: string | null;
+  document_version_number?: number | null;
+  latest_document_version_number?: number | null;
+  is_latest_document_version?: boolean | null;
+  conflict_group_id?: string | null;
 };
 
 type GroundingResult = {
@@ -41,6 +46,9 @@ type GroundingResult = {
   matched_terms: string[];
   exact_phrase_match: boolean;
   occurrence_count: number;
+  rrf_score?: number | null;
+  lexical_rank?: number | null;
+  semantic_rank?: number | null;
 };
 
 type GroundingCitation = {
@@ -143,7 +151,7 @@ function encodePathPart(value: string): string {
 
 function resourcePath(
   selection: Selection,
-  resource: "grounding" | "response",
+  resource: "grounding" | "response" | "review",
 ) {
   return [
     "/workspaces",
@@ -336,6 +344,55 @@ export default function Home() {
       }
     } finally {
       setIsLoadingResponse(false);
+    }
+  }
+
+  async function executeReview(
+    action: "ACCEPT" | "EDIT_AND_APPROVE" | "REJECT",
+  ) {
+    setError("");
+    setNotice("");
+    if (!isComplete(selection)) {
+      setError("Enter all four identifiers before executing a review action.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await requestApi<{
+        response_id: string;
+        workspace_id: string;
+        questionnaire_id: string;
+        questionnaire_version_id: string;
+        questionnaire_version_question_id: string;
+        action: string;
+        is_approved: boolean;
+        revision: ResponseRevision;
+      }>(resourcePath(selection, "review"), token, {
+        method: "POST",
+        body: JSON.stringify({
+          action,
+          edited_answer: answer.trim() || null,
+          selected_chunk_ids: [...selectedChunkIds],
+        }),
+      });
+
+      await loadResponse();
+      setNotice(
+        action === "ACCEPT"
+          ? "Draft approved as response."
+          : action === "EDIT_AND_APPROVE"
+            ? "Edited response approved."
+            : "Draft rejected (status marked for review).",
+      );
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to process review action.",
+      );
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -656,6 +713,26 @@ export default function Home() {
                             Document {candidate.document_id}
                           </span>
                           <span>Version {candidate.version_number}</span>
+                          {candidate.is_latest_document_version === true ? (
+                            <span className="status-badge status-matched">
+                              Current v
+                              {candidate.document_version_number ??
+                                candidate.version_number}
+                            </span>
+                          ) : candidate.is_latest_document_version === false ? (
+                            <span className="status-badge status-empty">
+                              Superseded (v
+                              {candidate.document_version_number ??
+                                candidate.version_number}{" "}
+                              of{" "}
+                              {candidate.latest_document_version_number ?? "?"})
+                            </span>
+                          ) : null}
+                          {candidate.conflict_group_id ? (
+                            <span className="status-badge status-empty">
+                              Conflict: {candidate.conflict_group_id}
+                            </span>
+                          ) : null}
                           <span>
                             Bytes {candidate.normalized_start_byte}–
                             {candidate.normalized_end_byte}
@@ -749,16 +826,51 @@ export default function Home() {
                   </p>
                 )}
               </div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  marginTop: "12px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  className="button button-primary"
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => executeReview("ACCEPT")}
+                >
+                  Approve Draft
+                </button>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => executeReview("EDIT_AND_APPROVE")}
+                >
+                  Edit & Approve
+                </button>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  disabled={isSaving}
+                  onClick={() => executeReview("REJECT")}
+                >
+                  Reject Draft
+                </button>
+              </div>
               <button
-                className="button button-primary button-wide"
+                className="button button-secondary button-wide"
                 type="submit"
                 disabled={isSaving}
+                style={{ marginTop: "8px" }}
               >
-                {isSaving ? "Saving revision…" : "Save response"}
+                {isSaving ? "Saving revision…" : "Save custom response"}
                 <span aria-hidden="true">↗</span>
               </button>
               <p className="helper-text response-helper">
-                Saving creates a revision through the existing response API.
+                Review actions execute server-authorized decisions; saving
+                creates an immutable revision.
               </p>
             </form>
 

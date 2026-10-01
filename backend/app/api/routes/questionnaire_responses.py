@@ -19,10 +19,19 @@ from app.api.schemas import (
     QuestionnaireResponseResponse,
     QuestionnaireResponseRevisionResponse,
     QuestionnaireResponseUpsert,
+    QuestionnaireReviewDecisionRequest,
+    QuestionnaireReviewResultResponse,
 )
 from app.auth import WorkspaceContext, assert_workspace_role, get_workspace_context
 from app.db import get_db
+from app.evidence.context.selector import select_evidence_context
 from app.models import WorkspaceRole
+from app.questionnaires.generation.errors import GenerationBoundaryError
+from app.questionnaires.generation.schemas import GeneratedDraftPayload
+from app.questionnaires.generation.validator import (
+    build_generation_context,
+    validate_generated_draft,
+)
 from app.questionnaires.grounding.errors import (
     GroundingError,
     GroundingQueryValidationError,
@@ -49,6 +58,23 @@ from app.questionnaires.responses.service import (
     list_latest_responses_for_version,
     save_response,
 )
+from app.questionnaires.review.errors import (
+    ReviewAuthorizationError,
+    ReviewCitationValidationError,
+    ReviewError,
+    ReviewQuestionNotFoundError,
+    ReviewValidationError,
+    ReviewWorkspaceMismatchError,
+)
+from app.questionnaires.review.service import (
+    apply_review_decision,
+    build_review_context,
+)
+from app.questionnaires.review.types import (
+    ReviewAction,
+    ReviewDecision,
+)
+from app.questionnaires.types import ResponseStatus
 
 router = APIRouter(prefix="/workspaces", tags=["questionnaire-responses"])
 
@@ -71,6 +97,12 @@ _GROUNDING_PATH = (
     "/{workspace_id}/questionnaires/{questionnaire_id}"
     "/versions/{questionnaire_version_id}"
     "/questions/{questionnaire_version_question_id}/grounding"
+)
+
+_REVIEW_PATH = (
+    "/{workspace_id}/questionnaires/{questionnaire_id}"
+    "/versions/{questionnaire_version_id}"
+    "/questions/{questionnaire_version_question_id}/review"
 )
 
 
@@ -137,6 +169,33 @@ def _grounding_http_error(exc: GroundingError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Questionnaire grounding failed",
+    )
+
+
+def _review_http_error(exc: ReviewError) -> HTTPException:
+    """Map review workflow failures to safe API responses."""
+
+    if isinstance(exc, ReviewAuthorizationError):
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient workspace role for this review operation",
+        )
+
+    if isinstance(exc, (ReviewQuestionNotFoundError, ReviewWorkspaceMismatchError)):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Questionnaire version question not found",
+        )
+
+    if isinstance(exc, (ReviewCitationValidationError, ReviewValidationError)):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc) or "Review decision failed validation",
+        )
+
+    return HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Questionnaire review operation failed",
     )
 
 
@@ -502,6 +561,166 @@ def read_questionnaire_response_history(
             detail="Questionnaire response not found",
         )
     return [_revision_response(result, revision) for revision in result.revisions]
+
+
+@router.post(
+    _REVIEW_PATH,
+    response_model=QuestionnaireReviewResultResponse,
+    status_code=status.HTTP_200_OK,
+)
+def review_questionnaire_draft(
+    questionnaire_id: uuid.UUID,
+    questionnaire_version_id: uuid.UUID,
+    questionnaire_version_question_id: uuid.UUID,
+    payload: QuestionnaireReviewDecisionRequest,
+    context: WorkspaceAccess,
+    db: DbSession,
+) -> QuestionnaireReviewResultResponse:
+    """Execute an explicit human review decision (ACCEPT, APPROVE, EDIT_AND_APPROVE, REJECT)."""
+
+    assert_workspace_role(context, db, *_WRITE_ROLES)
+
+    if not _grounding_question_in_scope(
+        db,
+        workspace_id=context.workspace.id,
+        questionnaire_id=questionnaire_id,
+        questionnaire_version_id=questionnaire_version_id,
+        questionnaire_version_question_id=questionnaire_version_question_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Questionnaire version question not found",
+        )
+
+    # 1. Parse review action
+    try:
+        action_enum = ReviewAction(payload.action.strip().upper())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"Invalid review action '{payload.action}'. "
+                "Must be ACCEPT, APPROVE, EDIT_AND_APPROVE, or REJECT."
+            ),
+        ) from exc
+
+    # 2. Ground question to obtain authoritative evidence candidates
+    try:
+        grounding_result = ground_question(
+            db,
+            workspace_id=context.workspace.id,
+            questionnaire_version_id=questionnaire_version_id,
+            questionnaire_version_question_id=questionnaire_version_question_id,
+        )
+    except GroundingError as exc:
+        raise _grounding_http_error(exc) from exc
+
+    # 3. Select bounded context (Phase 2D.2)
+    candidates = [res.candidate for res in grounding_result.results]
+    selection_result = select_evidence_context(
+        candidates,
+        authorized_workspace_id=context.workspace.id,
+    )
+
+    # 4. Fetch question model
+    question = db.get(QuestionnaireVersionQuestion, questionnaire_version_question_id)
+    if question is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Questionnaire version question not found",
+        )
+
+    # 5. Build generation context (Phase 2D.3)
+    gen_context = build_generation_context(
+        question=question,
+        context_result=selection_result,
+        search_version=grounding_result.search_version,
+    )
+
+    # 6. Validate untrusted draft payload through Phase 2D.3 generation boundary
+    if payload.selected_citation_handles is not None:
+        draft_handles = payload.selected_citation_handles
+    elif payload.selected_chunk_ids is not None:
+        chunk_set = set(payload.selected_chunk_ids)
+        draft_handles = [
+            item.citation_handle
+            for item in gen_context.evidence_context
+            if item.evidence_chunk_id in chunk_set
+        ]
+    else:
+        draft_handles = [item.citation_handle for item in gen_context.evidence_context]
+
+    draft_answer = (payload.edited_answer or "").strip()
+    if not gen_context.evidence_context or not draft_handles or not draft_answer:
+        draft_status = ResponseStatus.INSUFFICIENT_EVIDENCE
+        draft_handles = []
+    else:
+        draft_status = ResponseStatus.PROPOSED
+
+    fallback_answer = draft_answer or "No evidence."
+    effective_draft_answer = (
+        payload.edited_answer if draft_status == ResponseStatus.PROPOSED else fallback_answer
+    )
+    draft_payload = GeneratedDraftPayload(
+        answer=effective_draft_answer,
+        status=draft_status,
+        citation_handles=draft_handles,
+        uncertainty_notes=payload.rejection_notes,
+    )
+
+    try:
+        validated_draft = validate_generated_draft(gen_context, draft_payload)
+    except GenerationBoundaryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Draft payload failed generation boundary validation: {exc}",
+        ) from exc
+
+    # 7. Build review draft context from genuine validated draft
+    review_context = build_review_context(gen_context, validated_draft)
+
+    decision = ReviewDecision(
+        action=action_enum,
+        edited_answer=payload.edited_answer,
+        selected_citation_handles=(
+            tuple(payload.selected_citation_handles)
+            if payload.selected_citation_handles is not None
+            else None
+        ),
+        selected_chunk_ids=(
+            tuple(payload.selected_chunk_ids) if payload.selected_chunk_ids is not None else None
+        ),
+        rejection_notes=payload.rejection_notes,
+        target_status=payload.target_status,
+    )
+
+    try:
+        exec_res = apply_review_decision(
+            db,
+            workspace_id=context.workspace.id,
+            actor_user_id=context.user.id,
+            actor_role=context.membership.role,
+            review_context=review_context,
+            decision=decision,
+        )
+        read_res = get_response_or_raise(
+            db,
+            workspace_id=context.workspace.id,
+            response_id=exec_res.response.id,
+        )
+    except ReviewError as exc:
+        raise _review_http_error(exc) from exc
+
+    return QuestionnaireReviewResultResponse(
+        response_id=exec_res.response.id,
+        workspace_id=exec_res.response.workspace_id,
+        questionnaire_id=exec_res.response.questionnaire_id,
+        questionnaire_version_id=exec_res.response.questionnaire_version_id,
+        questionnaire_version_question_id=exec_res.response.questionnaire_version_question_id,
+        action=exec_res.action.value,
+        is_approved=exec_res.is_approved,
+        revision=_revision_response(read_res, exec_res.revision),
+    )
 
 
 __all__ = ["router"]

@@ -2,16 +2,31 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.models import WorkspaceRole
+from app.questionnaires.generation.config import (
+    MAX_ANSWER_CHARACTERS,
+    MAX_CITED_HANDLES,
+    MAX_UNCERTAINTY_NOTES_CHARACTERS,
+)
 from app.questionnaires.grounding.types import GroundingStatus
 from app.questionnaires.types import ResponseStatus
+
+_HANDLE_PATTERN = re.compile(r"^EVIDENCE-[1-9]\d*$")
 
 
 class WorkspaceCreate(BaseModel):
@@ -371,3 +386,143 @@ class QuestionnaireResponseLatestResponse(BaseModel):
     questionnaire_version_id: uuid.UUID
     questionnaire_version_question_id: uuid.UUID
     current_revision: QuestionnaireResponseRevisionResponse
+
+
+class QuestionnaireReviewEvidenceItemResponse(BaseModel):
+    """Reviewer-visible evidence candidate with full provenance and freshness."""
+
+    citation_handle: str
+    evidence_chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    version_id: uuid.UUID
+    version_number: int
+    document_name: str | None = None
+    document_version_number: int
+    latest_document_version_number: int | None = None
+    is_latest_document_version: bool | None = None
+    document_status: str
+    conflict_group_id: str | None = None
+    chunk_index: int
+    content_hash: str
+    normalized_start_byte: int
+    normalized_end_byte: int
+    section_label: str | None = None
+    page_number: int | None = None
+    content: str
+    token_count: int
+    rrf_score: float | None = None
+    lexical_rank: int | None = None
+    semantic_rank: int | None = None
+    is_cited_by_draft: bool = False
+
+
+class QuestionnaireReviewContextResponse(BaseModel):
+    """Server-authorized review context combining question metadata, draft, and evidence."""
+
+    question_id: uuid.UUID
+    questionnaire_id: uuid.UUID
+    questionnaire_version_id: uuid.UUID
+    questionnaire_version_question_id: uuid.UUID
+    question_text: str
+    section_path: list[str]
+    authorized_workspace_id: uuid.UUID
+    draft_answer: str | None
+    proposed_status: ResponseStatus
+    uncertainty_notes: str | None = None
+    evidence_items: list[QuestionnaireReviewEvidenceItemResponse]
+    cited_handles: list[str]
+    cited_chunk_ids: list[uuid.UUID]
+    search_version: str
+    selection_version: str
+    generation_boundary_version: str
+    has_stale_or_conflicting_evidence: bool
+
+
+class QuestionnaireReviewDecisionRequest(BaseModel):
+    """Reviewer decision payload submitted from review workbench.
+
+    Strictly enforced with ConfigDict(extra="forbid").
+    Supports bounded inputs and mutually exclusive citation selector.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    action: str
+    edited_answer: Annotated[str | None, Field(default=None, max_length=MAX_ANSWER_CHARACTERS)] = (
+        None
+    )
+    selected_citation_handles: list[str] | None = Field(
+        default=None,
+        max_length=MAX_CITED_HANDLES,
+    )
+    selected_chunk_ids: list[uuid.UUID] | None = Field(
+        default=None,
+        max_length=MAX_CITED_HANDLES,
+    )
+    rejection_notes: Annotated[
+        str | None, Field(default=None, max_length=MAX_UNCERTAINTY_NOTES_CHARACTERS)
+    ] = None
+    target_status: ResponseStatus | None = None
+
+    @field_validator("selected_citation_handles")
+    @classmethod
+    def validate_handle_formats(cls, handles: list[str] | None) -> list[str] | None:
+        if handles is None:
+            return None
+        seen = set()
+        for h in handles:
+            if not _HANDLE_PATTERN.match(h):
+                raise ValueError(
+                    f"Invalid citation handle format '{h}'. Must match 'EVIDENCE-N' "
+                    "(e.g. 'EVIDENCE-1')."
+                )
+            if h in seen:
+                raise ValueError(f"Duplicate citation handle '{h}'.")
+            seen.add(h)
+        return handles
+
+    @model_validator(mode="after")
+    def validate_action_and_target_status(self) -> QuestionnaireReviewDecisionRequest:
+        raw_action = (self.action or "").strip().upper()
+        valid_actions = {"ACCEPT", "APPROVE", "EDIT_AND_APPROVE", "REJECT"}
+        if raw_action not in valid_actions:
+            raise ValueError(
+                f"Invalid review action '{self.action}'. Must be one of: "
+                f"{', '.join(sorted(valid_actions))}"
+            )
+
+        if raw_action in {"ACCEPT", "APPROVE", "EDIT_AND_APPROVE"}:
+            if self.target_status is not None and self.target_status != ResponseStatus.APPROVED:
+                raise ValueError(
+                    f"Action '{raw_action}' requires target_status to be None or APPROVED, "
+                    f"got '{self.target_status.value}'"
+                )
+        elif raw_action == "REJECT":
+            if self.target_status is not None and self.target_status != ResponseStatus.NEEDS_REVIEW:
+                raise ValueError(
+                    f"Action 'REJECT' requires target_status to be None or NEEDS_REVIEW, "
+                    f"got '{self.target_status.value}'"
+                )
+
+        if self.selected_citation_handles is not None and self.selected_chunk_ids is not None:
+            raise ValueError(
+                "selected_citation_handles and selected_chunk_ids are mutually exclusive; "
+                "provide at most one citation selector"
+            )
+        return self
+
+
+class QuestionnaireReviewResultResponse(BaseModel):
+    """Result of executing a human review decision."""
+
+    response_id: uuid.UUID
+    workspace_id: uuid.UUID
+    questionnaire_id: uuid.UUID
+    questionnaire_version_id: uuid.UUID
+    questionnaire_version_question_id: uuid.UUID
+    action: str
+    is_approved: bool
+    revision: QuestionnaireResponseRevisionResponse
