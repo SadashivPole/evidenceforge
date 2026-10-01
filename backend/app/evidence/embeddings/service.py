@@ -232,6 +232,51 @@ class EmbeddingGenerator:
             )
         return tuple(_validate_vector(row, self.config) for row in rows)
 
+    def generate_query(self, query: str) -> tuple[float, ...]:
+        """Generate one validated vector for a query using the configured query encoder."""
+
+        if not isinstance(query, str):
+            raise TypeError("query must be a string")
+        if not query.strip():
+            raise ValueError("query must not be empty")
+
+        tokenizer = getattr(self.model, "tokenizer", None)
+        prepared_query = (
+            _prepare_document_text(
+                query,
+                tokenizer,
+                max_word_pieces=self.config.max_input_word_pieces,
+            )
+            if tokenizer is not None
+            else query
+        )
+
+        encoder = getattr(self.model, self.config.query_encoder, None)
+        if not callable(encoder):
+            raise EmbeddingConfigurationError(
+                f"Embedding model does not expose {self.config.query_encoder}"
+            )
+
+        try:
+            output = encoder(
+                [prepared_query],
+                batch_size=self.config.batch_size,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+                normalize_embeddings=self.config.normalize_embeddings,
+            )
+        except EmbeddingError:
+            raise
+        except Exception as exc:
+            raise EmbeddingGenerationError("Query embedding encoder failed") from exc
+
+        rows = _as_rows(output)
+        if len(rows) != 1:
+            raise EmbeddingGenerationError(
+                "Embedding encoder returned an invalid row count for query"
+            )
+        return _validate_vector(rows[0], self.config)
+
 
 def list_workspace_embedding_targets(
     db: Session,
