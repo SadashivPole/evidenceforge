@@ -12,7 +12,7 @@ EvidenceForge organizes security-questionnaire questions alongside workspace-sco
 
 ![Diagram of EvidenceForge's implemented API, web workbench, PostgreSQL/pgvector persistence and grounding boundary](docs/assets/evidenceforge-architecture.svg)
 
-> **Local-development status:** The public `main` source inspected for this guide was commit `027e104`. Local demo outcomes listed below were supplied for this documentation task. They are not production validation. This README has been applied locally; review the diff against your current branch before committing or publishing.
+> **Documentation provenance and publication status:** The original audit behind this guide inspected public `main` at commit `027e104`. Local demo outcomes listed below were supplied for that documentation task; they are not production validation. The redesign was subsequently applied locally, committed as [`5eacc0fc5cda4ea8436eafabd47b68f154708c9a`](https://github.com/SadashivPole/evidenceforge/commit/5eacc0fc5cda4ea8436eafabd47b68f154708c9a), and pushed to public `main`. Its [GitHub Actions CI run](https://github.com/SadashivPole/evidenceforge/actions/runs/38136621746) passed the **Backend**, **Backend PostgreSQL concurrency**, and **Frontend** jobs. Those later actions do not expand the original audit scope or turn supplied demo outcomes into production validation.
 
 ## Contents
 
@@ -374,7 +374,7 @@ The corpus/methodology and tests cover retrieval ranking and evidence-state hand
 
 ## Testing and quality checks
 
-No tests were executed for this redesign. The project CI file defines Python lint/format/compile/unit tests, a PostgreSQL evidence persistence test, and frontend lint/typecheck/format/build jobs. To exercise authentication without provisioning the Compose database, use the repository test fixture with the in-memory test app; the generated token remains internal to the test process. Run locally and treat your own output as authoritative.
+No tests were executed by the original documentation audit. The project CI file defines Python lint/format/compile/unit tests, a PostgreSQL evidence persistence test, and frontend lint/typecheck/format/build jobs. After publication, the [GitHub Actions CI run for commit `5eacc0fc5cda4ea8436eafabd47b68f154708c9a`](https://github.com/SadashivPole/evidenceforge/actions/runs/38136621746) passed the **Backend**, **Backend PostgreSQL concurrency**, and **Frontend** jobs. That CI result is separate from the audit; run locally and treat your own output as authoritative. To exercise authentication without provisioning the Compose database, use the repository test fixture with the in-memory test app; the generated token remains internal to the test process.
 
 Backend commands from repository root (install with `python -m pip install -e "backend[dev]"` first):
 
@@ -397,7 +397,7 @@ npm run format:check
 npm run build
 ```
 
-The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector service. CI configuration is not evidence that a current run passed.
+The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector service. Inspecting CI configuration alone is not evidence that a run passed; the published redesign commit's CI result is recorded above.
 
 ## Troubleshooting
 
