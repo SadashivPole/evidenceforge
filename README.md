@@ -1,983 +1,505 @@
 # EvidenceForge
 
-EvidenceForge is a local-first workbench for building security questionnaire workflows around approved evidence.
+**Evidence first. Answers second.**
 
-The project is intentionally designed around a bounded target workflow:
+A local-first workbench for security-questionnaire evidence, provenance, retrieval, and review.
 
-**approved evidence → questionnaire → grounded response → citations → human review**
+**Workspace isolation** · **XLSX import** · **Evidence provenance** · **Hybrid grounding** · **Response history**
 
-The current implementation provides the evidence, questionnaire, persistence, provenance, retrieval, and evaluation foundations for that workflow. It does not yet provide an end-to-end response-generation, reviewer-decision, or export workflow.
+[Quick start](#quick-start) · [Problem and foundation](#the-problem-and-the-foundation) · [Architecture](#architecture) · [API reference](#api-reference) · [Limitations](#current-status-and-limitations)
 
-EvidenceForge is designed to reduce the effort required to organize evidence and produce defensible questionnaire responses without turning unsupported information into confident answers.
+EvidenceForge organizes security-questionnaire questions alongside workspace-scoped evidence and citations. It imports questionnaire workbooks, stores versioned evidence, grounds a question against evidence candidates, and persists cited response revisions with authorization and validation checks. It is a development workbench—not a compliance certification, autonomous answer system, or automatic submission tool.
 
-It is not intended to be a generic chatbot, autonomous compliance authority, autonomous agent, or automatic questionnaire submitter.
+![Diagram of EvidenceForge's implemented API, web workbench, PostgreSQL/pgvector persistence and grounding boundary](docs/assets/evidenceforge-architecture.svg)
 
----
+> **Local-development status:** The public `main` source inspected for this guide was commit `027e104`. Local demo outcomes listed below were supplied for this documentation task. They are not production validation. This README has been applied locally; review the diff against your current branch before committing or publishing.
 
-## Current project status
+## Contents
 
-At commit `aa8858c`, EvidenceForge has completed the security-boundary, evidence, questionnaire, response-persistence, review-foundation, retrieval, and evaluation slices.
+- [What it is](#what-it-is)
+- [The problem and the foundation](#the-problem-and-the-foundation)
+- [Implementation status](#implementation-status)
+- [Architecture](#architecture)
+- [Workflow](#workflow)
+- [Repository map](#repository-map)
+- [Technology stack](#technology-stack)
+- [Prerequisites](#prerequisites)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [API reference](#api-reference)
+- [Authentication and workspace security](#authentication-and-workspace-security)
+- [Evidence, citations, and revisions](#evidence-citations-and-revisions)
+- [Synthetic local demonstration](#synthetic-local-demonstration)
+- [Retrieval benchmark context](#retrieval-benchmark-context)
+- [Testing and quality checks](#testing-and-quality-checks)
+- [Troubleshooting](#troubleshooting)
+- [Current status and limitations](#current-status-and-limitations)
+- [Contributing safely](#contributing-safely)
+- [FAQ](#faq)
+- [Glossary](#glossary)
+- [Further reading](#further-reading)
 
-The current implementation includes:
+## What it is
 
-- workspace and membership security boundaries;
-- bearer authentication;
-- authorization and workspace isolation;
-- audit events;
-- evidence documents, immutable versions, and chunks;
-- evidence provenance and normalization;
-- deterministic questionnaire XLSX processing;
-- questionnaire persistence;
-- immutable questionnaire response history;
-- citation persistence and provenance;
-- PostgreSQL concurrency handling;
-- question review/workbench foundations;
-- deterministic lexical retrieval;
-- Phase 2A retrieval evaluation;
-- Phase 2B evaluation hardening; and
-- a deterministic 60-case evaluation corpus.
+Security and compliance teams repeatedly answer questions about controls, policies, and procedures. The supporting material changes over time and may live in separate documents. An answer that cannot be traced to the evidence and version that support it is difficult to verify later.
 
-The current implementation measures retrieval and evidence-state behavior. It does not yet implement a response/generation layer that produces answers, reviewer decisions, or true abstention outcomes.
+EvidenceForge is a developer-oriented foundation for organizing this work. A **workspace** is the tenant-like boundary for a team's questionnaires, evidence, and responses. A **citation** is a server-resolved reference to an evidence chunk—not text supplied by a client and trusted without checking. The API keeps the response, evidence provenance, workspace membership, and revision history connected.
 
----
+Today, a developer can import XLSX questionnaire data, ingest supported evidence files, retrieve workspace-authorized evidence candidates, save a response with citations, and inspect its history. The frontend is a focused grounding and response workbench; it does not provide a full questionnaire import/admin product experience.
 
-## Current implementation
+### The problem and the foundation
 
-### Security and workspace boundary
+| Manual process | EvidenceForge foundation |
+|---|---|
+| Questions and source documents are handled separately. | Questionnaire versions and evidence versions are persisted. |
+| An answer can lose its source when copied or edited. | Citation records resolve to evidence document/version/chunk metadata. |
+| Approval can be treated as a label in client input. | Status-specific validation and role checks run server-side. |
+| A changed response can obscure the earlier one. | Changed updates append immutable response revisions; identical updates are idempotent. |
+| A resource identifier can be guessed across teams. | Workspace access derives from the authenticated user's membership; cross-workspace references are rejected. |
 
-The project includes:
+These are intended workflow benefits, not measured time savings or a security certification.
 
-- workspace and membership persistence;
-- owner, admin, member, and viewer roles;
-- database-backed opaque bearer-token authentication;
-- token expiry and revocation checks;
-- server-side authorization derived from authenticated workspace memberships;
-- protected workspace and security-sensitive routes;
-- cross-workspace isolation checks;
-- IDOR protections;
-- audit-event persistence.
+## Implementation status
 
-Bearer tokens are intentionally provisioned outside the public API. A deployment-specific identity/token provisioning mechanism must create users and token records before protected routes can be used.
+Statuses describe what is present in the inspected source and what has evidence in the supplied local synthetic demo. **Implemented** means code exists; **Verified locally** is reserved for the concrete demo outcomes supplied with this request. No full test suite was executed as part of preparing this document.
 
-The public API does not currently provide self-service registration or token issuance.
+| Capability | Current status | What it does | Verification or limitation |
+|---|---|---|---|
+| Workspace, membership, roles, bearer authentication | Implemented | Protects tenant-scoped APIs using database-backed opaque bearer tokens and membership-derived authorization. | Cross-workspace behavior and MEMBER denial are in supplied local demo; not an external audit. Token provisioning is outside the public API. |
+| XLSX questionnaire import/versioning | Implemented | Deterministic workbook parsing, normalization, question identity, persistence, and import results. | One-question synthetic import returned HTTP 200/version 1 in the supplied demo. |
+| Evidence documents, versions, chunks | Implemented | Uploads supported evidence, normalizes/chunks content, persists hashes and locations. | Source includes size/type validation and persistence; inspect route limitations and use synthetic files. |
+| Citation association and validation | Implemented | Resolves chunk IDs to workspace-owned evidence and stores provenance on response revisions. | Valid and cross-workspace citation cases are in the supplied local demo. |
+| Deterministic lexical + semantic hybrid grounding with RRF | Implemented | Grounding API combines lexical and semantic candidate retrieval and reciprocal-rank fusion (RRF); retrieval is not answer generation. | Source routes question grounding through the hybrid retriever; use a configured/available embedding path and benchmark/test the actual environment. |
+| Response persistence, approval, idempotency, revisions | Implemented | Stores one logical response per question with immutable revisions and citation records. | Supplied local demo covers MEMBER rejection, citation validation, idempotency, revision 2, and history. |
+| Explicit human review action | Implemented, not a complete review product | API and workbench support explicit accept/approve/edit-and-approve/reject operations against grounded context. | Source includes route/service/UI integration; not an autonomous reviewer or a broad production review console. |
+| Liveness and readiness | Implemented | Liveness reports process state; readiness checks database connectivity. | Supplied local demo reports HTTP 200 for both, database `ok` for readiness. |
+| Frontend | Partial workbench | Next.js screen accepts resource IDs/token, runs grounding, loads/saves responses, and presents review operations. | Not a complete administration/import/export experience. Compose proxy variable mismatch is noted under [Troubleshooting](#troubleshooting). |
+| LLM answer generation | Not implemented end to end | Provider-neutral contracts and validation/evaluation scaffolding exist, but no configured production answer-generation request workflow is exposed. | Mock evaluation components are not a shipped generation service. |
+| Export / automatic submission / chatbot | Planned or absent | Not present as completed product capabilities. | Do not infer from design documents. |
 
----
+## Architecture
 
-### Evidence persistence
+The hero diagram above is the architecture overview; it is shown once to keep the page concise.
 
-The evidence layer provides persistent records for:
+- **Next.js workbench:** a focused UI for grounding, selecting candidate citations, working with persisted responses, and explicit review actions.
+- **FastAPI:** owns HTTP contracts, bearer authentication, workspace membership checks, validation, persistence, audit events, and grounding orchestration.
+- **PostgreSQL:** stores workspaces, memberships, questionnaire imports/versions/questions, evidence metadata/versions/chunks, responses/revisions/citations, and audit records.
+- **pgvector:** stores embedding records used by semantic retrieval. Embedding generation/backfill is an explicit service path; local availability/model setup must be verified before semantic behavior is relied on.
+- **Grounding:** server-side retrieval returns evidence candidates with provenance. It does not synthesize a questionnaire answer.
 
-- evidence documents;
-- immutable evidence versions;
-- evidence chunks;
-- document/version/chunk provenance;
-- normalized content metadata;
-- evidence chunk offsets;
-- content hashes; and
-- ingestion-related persistence.
+The architecture SVG intentionally excludes an online LLM provider, automatic export, or automatic questionnaire submission.
 
-The response layer uses persisted evidence chunks as citation targets.
+## Workflow
 
----
+1. Configure a local `.env` and start the Compose stack.
+2. Confirm API liveness and database readiness.
+3. Create/identify a workspace and import a synthetic XLSX through the import API.
+4. Create an evidence document, upload a supported synthetic file version, and inspect its chunks.
+5. Identify a questionnaire version question and call its grounding route to retrieve authorized candidates.
+6. Submit a response update with a status and evidence chunk IDs. The server checks workspace membership, status rules, roles, and citations.
+7. Repeat the exact update to confirm idempotency; change the answer to create a new revision; fetch response history.
+8. For explicit review, use the review route/workbench operation on grounded context. This is a human-triggered operation, not model-generated approval.
+9. Run tests and record the result from your local environment; do not copy results from another run.
 
-### Deterministic questionnaire processing
+![Flow from local environment setup through readiness checks and the API docs/workbench](docs/assets/evidenceforge-local-quickstart.svg)
 
-The questionnaire layer provides:
-
-- deterministic XLSX questionnaire parsing;
-- explicit questionnaire and question identity;
-- normalized question representation;
-- deterministic canonical questionnaire hashing;
-- questionnaire version persistence;
-- version-specific question persistence;
-- import provenance; and
-- import-attempt persistence.
-
-The identity and hashing contracts intentionally avoid using raw XLSX ZIP bytes or filenames as semantic identity.
-
-Question identity is based on deterministic normalized questionnaire content and explicit source identifiers when available.
-
----
-
-### Retrieval and evaluation foundations
-
-EvidenceForge currently provides deterministic lexical retrieval over authorized evidence candidates. Phase 2A established the retrieval baseline, and Phase 2B hardened the evaluation semantics without changing production retrieval or the 60-case corpus.
-
-The benchmark corpus contains 60 deterministic cases:
-
-```text
-SUPPORTED: 20
-AMBIGUOUS: 10
-INSUFFICIENT_EVIDENCE: 10
-CONFLICTING_STALE: 10
-MALICIOUS_INJECTED: 10
-```
-
-The current measured results are benchmark results for retrieval and evidence-state handling, not overall product accuracy:
+## Repository map
 
 ```text
-Recall@5:                    0.8333333333333334
-nDCG@5:                      0.9219567263864729
-nDCG@10:                     0.9219567263864729
-Evidence-state match rate:  1.0
-Conflict/Stale complete rate: 1.0
-Injection content inert rate: 1.0
-Injection candidates surfaced: 10
-Cross-workspace leakage count: 0
-Cross-workspace leakage rate: 0.0
+.
+├── .github/workflows/ci.yml       # CI jobs for Python, PostgreSQL test, and frontend checks
+├── .env.example                   # Safe local configuration template; do not put secrets in README
+├── compose.yaml                   # db, api, and web services
+├── backend/
+│   ├── app/api/routes/            # Health, workspaces, evidence, import, grounding, responses, review
+│   ├── app/api/schemas.py         # Pydantic request and response contracts
+│   ├── app/auth.py                # Bearer authentication and membership/role checks
+│   ├── app/evidence/              # Ingestion, chunking, embeddings, retrieval, citations, context
+│   ├── app/questionnaires/        # XLSX, persistence, grounding, response, generation boundary, review
+│   ├── app/models.py              # Core relational models and roles
+│   ├── app/main.py                # FastAPI app and router registration
+│   ├── migrations/versions/       # Alembic database schema history
+│   ├── tests/                     # API, unit, PostgreSQL and evaluation tests
+│   └── pyproject.toml             # Python requirements and Ruff/mypy/pytest settings
+├── docs/                          # Architecture, threat model, evaluation and design records
+└── frontend/
+    ├── app/                       # Next.js workbench interface
+    ├── next.config.mjs            # Browser API proxy rewrite
+    └── package.json               # Frontend scripts and dependencies
 ```
 
-`evidence_state_match` measures whether the retrieved evidence state matches the expected category-specific condition. It is not answer accuracy and is not an end-to-end abstention metric.
-
-**Correct Abstention: N/A — response/generation layer not implemented**
-
-Injection-like content is evaluated as inert evidence. End-to-end Injection Escape is also unavailable because no generation, tool, agent, or answer layer exists.
-
----
-
-## Phase 1K — Questionnaire response persistence
-
-Phase 1K adds a persistence-backed response layer on top of immutable questionnaire versions.
-
-The core relationship is:
-
-```text
-Workspace
-   │
-   └── Questionnaire
-          │
-          └── QuestionnaireVersion
-                 │
-                 └── QuestionnaireVersionQuestion
-                        │
-                        └── QuestionnaireResponse
-                               │
-                               └── QuestionnaireResponseRevision
-                                      │
-                                      └── QuestionnaireResponseCitation
-                                             │
-                                             └── EvidenceChunk
-```
-
-### Response model
-
-Each questionnaire-version question can have one logical response within a workspace.
-
-Responses support:
-
-- immutable revision history;
-- deterministic revision numbering;
-- idempotent identical updates;
-- workspace isolation;
-- typed response statuses;
-- multiple evidence citations;
-- citation ordering;
-- server-resolved evidence provenance;
-- transactional persistence; and
-- PostgreSQL-safe concurrent revision allocation.
-
-Imports do not automatically create responses.
-
-A response is created only through an explicit response mutation.
-
----
-
-## Response statuses
-
-The response status vocabulary is:
-
-```text
-PROPOSED
-APPROVED
-NEEDS_REVIEW
-INSUFFICIENT_EVIDENCE
-STALE_SOURCE
-CONFLICTING_SOURCES
-NOT_APPLICABLE
-DO_NOT_DISCLOSE
-```
-
-Status-specific validation is enforced by the response service.
-
-Examples:
-
-- `APPROVED` requires at least one citation.
-- `CONFLICTING_SOURCES` requires at least two citations.
-- `INSUFFICIENT_EVIDENCE` may have no answer text.
-- `NOT_APPLICABLE` may have no answer text.
-- `DO_NOT_DISCLOSE` may have no answer text.
-- duplicate citation targets are rejected.
-
----
-
-## Response lifecycle
-
-A response mutation follows a transactional workflow:
-
-```text
-authenticate
-    ↓
-authorize workspace role
-    ↓
-resolve questionnaire-version question
-    ↓
-resolve evidence citation targets
-    ↓
-lock existing response when present
-    ↓
-detect identical update
-    ↓
-allocate revision number
-    ↓
-persist immutable revision
-    ↓
-persist citations
-    ↓
-write audit event
-    ↓
-commit
-```
-
-Identical updates do not create unnecessary new revisions.
-
-Changed responses create a new immutable revision.
-
-Failed mutations are rolled back rather than partially committed.
-
----
-
-## Authorization model
-
-Response writes require one of:
-
-```text
-OWNER
-ADMIN
-MEMBER
-```
-
-`VIEWER` is read-only.
-
-`APPROVED` responses additionally require:
-
-```text
-OWNER
-ADMIN
-```
-
-The API verifies workspace membership and role before calling the response persistence layer.
-
-The response persistence service also requires an explicit workspace role for mutation operations.
-
----
-
-## Evidence citations
-
-Response citations are resolved from the persisted evidence hierarchy:
-
-```text
-EvidenceDocument
-      │
-      └── EvidenceDocumentVersion
-              │
-              └── EvidenceChunk
-```
-
-Each response citation can retain provenance information including:
-
-- evidence document identifier;
-- evidence version identifier;
-- evidence chunk identifier;
-- evidence version number;
-- evidence chunk index;
-- content hash;
-- normalized start offset;
-- normalized end offset;
-- optional section label; and
-- optional page number.
-
-Client callers provide evidence chunk identifiers.
-
-The response service resolves the persisted evidence metadata before creating citation records.
-
-Cross-workspace evidence references and invalid evidence references are rejected.
-
----
-
-## API
-
-The questionnaire-response API is workspace-scoped.
-
-### Create or revise one response
-
-```text
-PUT
-/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/questions/{questionnaire_version_question_id}/response
-```
-
-### Read one response
-
-```text
-GET
-/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/questions/{questionnaire_version_question_id}/response
-```
-
-### Read response history
-
-```text
-GET
-/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/questions/{questionnaire_version_question_id}/response/history
-```
-
-### List latest responses for a questionnaire version
-
-```text
-GET
-/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/responses
-```
-
-The API returns persisted revision information together with server-resolved citation metadata.
-
----
-
-## API error handling
-
-The response API distinguishes common failure classes.
-
-Typical responses include:
-
-```text
-403
-Authorization failure
-
-404
-Workspace, questionnaire, questionnaire version,
-question, response, or related resource not found
-
-409
-Persistence conflict or integrity conflict
-
-422
-Validation failure or invalid evidence citation
-
-500
-Unexpected server-side failure
-```
-
-Error responses should not expose sensitive evidence content or database internals.
-
----
-
-## Database and migrations
-
-EvidenceForge uses PostgreSQL with SQLAlchemy and Alembic.
-
-The current migration chain is:
-
-```text
-0001_initial
-    ↓
-0002_security_boundary
-    ↓
-0003_evidence_foundation
-    ↓
-0004_evidence_persistence
-    ↓
-0005_questionnaire_persistence
-    ↓
-0006_questionnaire_responses
-```
-
-The current migration head is:
-
-```text
-0006_questionnaire_responses
-```
-
-### Apply migrations
-
-The supported application path is through the API container:
+The source tree above summarizes tracked, relevant areas; local experimental files may exist in your checkout and should be preserved when applying documentation updates.
+
+## Technology stack
+
+| Technology | Use | Basic local setup? |
+|---|---|---|
+| Python 3.11+ | Backend package declares `requires-python >=3.11`; CI config uses Python 3.12; API image is Python 3.13. | Needed for local backend/tests; Docker uses its image. |
+| FastAPI + Pydantic | HTTP API, dependency injection, request/response validation. | Included in API container; Python development install for local tests. |
+| SQLAlchemy + Alembic | Relational persistence and versioned schema migrations. | Used by API container and backend tests. |
+| PostgreSQL 16 + pgvector | Compose database and vector column support; image is `pgvector/pgvector:0.8.6-pg16`. | Required for Compose and PostgreSQL integration tests. |
+| psycopg 3 | PostgreSQL driver. | Backend dependency. |
+| openpyxl | XLSX questionnaire workbook processing. | Backend dependency. |
+| sentence-transformers | Explicit local embedding model path. | Package dependency; actual model loading/download is optional to basic app startup and required only when invoking the embedding path. |
+| Next.js 16 / React 19 | Browser workbench. | Required only for frontend development outside Docker; Compose builds it. |
+| pytest, Ruff, mypy, httpx | Backend testing and quality tooling. | Install with `backend[dev]`. |
+| npm, ESLint, Prettier, TypeScript | Frontend dependency and quality workflow. | Frontend checks; use Node 20 as CI does. |
+
+Versions above reflect project metadata, image tags, and CI configuration inspected at `027e104`; they are not a compatibility guarantee for every host.
+
+## Prerequisites
+
+- Windows with PowerShell and Docker Desktop/Compose for the documented Compose path.
+- Python 3.11 or later for local backend tools (CI uses Python 3.12).
+- Node.js 20 and npm for frontend checks outside Docker.
+- Network access for initial container/package/model downloads as needed.
+- Ports **8000** (API) and **3000** (web) available. PostgreSQL is not published to a host port by `compose.yaml`.
+- PostgreSQL/pgvector is supplied by Compose; no separate host database is required for the basic stack.
+
+## Quick start
+
+The API container runs `alembic upgrade head` before starting Uvicorn. Starting the stack therefore applies migrations automatically; do not run an undocumented second migration process.
+
+From PowerShell:
 
 ```powershell
-docker compose exec api python -m alembic upgrade head
+Set-Location E:\Projects\evidenceforge
+python --version
+docker --version
+docker compose version
 ```
 
-### Check current migration
+Create a local `.env` from the tracked template. Replace the placeholder password with a unique local-only value, and make `POSTGRES_PASSWORD` and the password embedded in `DATABASE_URL` match. Keep `.env` private and untracked.
 
 ```powershell
-docker compose exec api python -m alembic current
+Copy-Item .env.example .env
+notepad .env
 ```
 
-The PostgreSQL service is internal to the Docker Compose network and is not currently published as a host port.
+Build and start services in the background:
 
----
-
-## Database integrity
-
-The response schema uses database constraints to enforce important invariants.
-
-Examples include:
-
-- one logical response per workspace, questionnaire version, and questionnaire-version question;
-- unique workspace-scoped response identifiers;
-- unique revision numbers per response;
-- positive revision numbers;
-- valid response status values;
-- unique citation order per revision;
-- unique evidence chunk per revision;
-- positive citation ordering;
-- workspace-scoped foreign-key relationships;
-- restrictive evidence-reference deletion behavior.
-
-These database constraints complement application-level validation.
-
-The database is authoritative for transaction ordering and concurrency-sensitive uniqueness.
-
----
-
-## PostgreSQL concurrency
-
-The response persistence layer includes explicit concurrency handling.
-
-Concurrent writes to the same logical questionnaire response are tested using PostgreSQL transactions and row locking.
-
-The implementation handles:
-
-- concurrent creation of the same logical response;
-- deterministic revision allocation;
-- unique logical response enforcement;
-- transaction conflicts;
-- retry after relevant integrity conflicts.
-
-The PostgreSQL response concurrency tests are included in the automated validation suite.
-
----
-
-## Validation status
-
-The current repository has been validated with:
-
-```text
-302 tests passed
-8 tests skipped
-1 warning
+```powershell
+docker compose up --build -d
+docker compose ps
 ```
 
-Additional validation performed during the questionnaire response work includes:
+Check liveness, readiness, and API docs:
 
-- PostgreSQL response concurrency tests;
-- workspace isolation tests;
-- authorization tests;
-- response lifecycle tests;
-- citation provenance tests;
-- rollback tests;
-- SQLite foreign-key enforcement;
-- Ruff checks;
-- Python compile checks;
-- Git whitespace checks;
-- clean PostgreSQL migration from `0001` through `0006`;
-- successful downgrade from `0006` to `0005`;
-- successful upgrade from `0005` back to `0006`.
+```powershell
+Invoke-RestMethod http://localhost:8000/health/live
+Invoke-RestMethod http://localhost:8000/health/ready
+```
 
-The current test environment reports one non-fatal Starlette/AnyIO deprecation warning from the installed dependency stack.
+Open `http://localhost:8000/docs` for FastAPI's generated API documentation and `http://localhost:3000` for the web workbench. The frontend currently needs workspace, questionnaire, version, and question identifiers plus a bearer token; it is not a guided onboarding/import UI.
 
-No GitHub Actions result is asserted here for commit `aa8858c`; the counts above are the locally validated repository state.
+### First-run authentication prerequisite
 
-Validation results describe the tested repository state and should not be interpreted as a production-security certification.
+The repository does **not** provide a supported first-user bootstrap, token-issuance CLI, development seeder, or public registration endpoint. `backend/app/auth.py` explicitly treats tokens as provisioned out of band. A brand-new Compose database can start and answer public health requests, but a developer cannot complete protected API/workbench workflows using only the documented Compose commands. Once an approved process has provisioned the first user and token, `POST /workspaces` creates a workspace and grants its caller the OWNER membership; OWNER/ADMIN can add an already-existing user through the membership route. The API has no route to create that initial user or issue its token.
 
----
+Consequently, there is no supported clean-machine procedure in this repository for creating the first local user/token or for making the first authenticated workspace. The protected request examples below are not immediately executable against a fresh Compose database until an authorized provisioning path exists. The supported test-fixture path is for tests only: `backend/tests/conftest.py` creates a temporary user, random bearer token, and workspace owner membership in an in-memory SQLite test app. The tests keep that token in process and do not print it. Run the focused auth/security tests from the backend setup to exercise that path:
 
-## Local development
+```powershell
+python -m pytest -q backend/tests/test_security_boundary.py
+```
 
-### Prerequisites
+This does not provision an account or token in the Compose database. For a protected local API demo, obtain an approved development provisioning procedure from the project maintainer/deployment owner. Do not create token rows manually or copy fixture tokens into the running app. Keep any token issued through an approved out-of-band mechanism in a process-scoped environment variable, such as `$env:TOKEN_ADMIN`; never echo it or commit it. After provisioning, verify the token using `GET /workspaces`; an empty list means authentication succeeded but no workspace membership exists yet. Create a workspace with `POST /workspaces` to make the authenticated caller its OWNER, then verify it appears in `GET /workspaces`. Without the provisioning procedure, treat protected API examples below as request templates only.
 
-- Python 3.11+
-- Node.js 20+
-- npm
-- Docker Desktop
-- Docker Compose
+To inspect startup logs without tearing down services:
 
----
+```powershell
+docker compose logs --tail 100 api web db
+```
 
-## Python development setup
+### Local Python development (optional)
 
-From the repository root:
+From the repository root, install the backend with development extras. Use a virtual environment per your team's local practices; these commands do not create or delete databases.
 
 ```powershell
 python -m pip install -e "backend[dev]"
 ```
 
----
+The `.env` `DATABASE_URL` uses the Compose service hostname `db`, suitable inside the container network. A host-run API needs a host-reachable PostgreSQL URL; Compose does not publish port 5432 in `compose.yaml`. Do not assume the container URL works from a host Python process.
 
-## Environment configuration
+### Questionnaire and evidence import sequence
 
-Copy the example environment file:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Configure required environment variables in `.env`.
-
-Do not commit real credentials, access tokens, API keys, or other secrets.
-
----
-
-## Start the local environment
+These calls require the out-of-band auth prerequisite above; they are request templates, not runnable on a fresh Compose database. The importer accepts an XLSX multipart `file`. Evidence ingestion supports `.txt` and `.md` source files up to 5 MiB; use only synthetic material in a demo.
 
 ```powershell
-docker compose up --build -d
+$Base = 'http://localhost:8000'
+$WorkspaceId = '<workspace-uuid-from-authorized-setup>'
+$XlsxPath = 'C:\EvidenceForgeDemo\synthetic-questionnaire.xlsx'
+$env:TOKEN_ADMIN = '<token-issued-through-approved-local-provisioning>'
+curl.exe -sS -i -F "file=@$XlsxPath" -H "Authorization: Bearer $env:TOKEN_ADMIN" "$Base/workspaces/$WorkspaceId/questionnaires/import"
 ```
 
-The API is expected at:
-
-```text
-http://localhost:8000
-```
-
-Health endpoints:
-
-```text
-/health/live
-/health/ready
-```
-
-The frontend is expected at:
-
-```text
-http://localhost:3000
-```
-
-The API container is configured to apply Alembic migrations before starting the application.
-
----
-
-## Run the test suite
-
-From the repository root:
+Create an evidence record by writing UTF-8 JSON, then upload a synthetic Markdown or text version. Replace IDs with values from genuine prior responses; this example does not assert their shape beyond the schemas documented by the API.
 
 ```powershell
-python -m pytest -q
+$DocPayloadPath = Join-Path $env:TEMP 'evidenceforge-document.json'
+$DocBody = @{ name = 'Synthetic access policy' } | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($DocPayloadPath, $DocBody, [System.Text.UTF8Encoding]::new($false))
+curl.exe -sS -i -X POST "$Base/workspaces/$WorkspaceId/documents" -H "Authorization: Bearer $env:TOKEN_ADMIN" -H 'Content-Type: application/json' --data-binary "@$DocPayloadPath"
+
+$DocumentId = '<document-uuid-from-real-response>'
+$EvidencePath = 'C:\EvidenceForgeDemo\synthetic-access-policy.md'
+curl.exe -sS -i -F "file=@$EvidencePath" -H "Authorization: Bearer $env:TOKEN_ADMIN" "$Base/workspaces/$WorkspaceId/documents/$DocumentId/versions"
 ```
 
-For the current validated repository state:
+After successful imports, use the returned questionnaire/version/question and evidence document/version/chunk IDs in the authorized list/read/grounding APIs. Fetch chunk IDs from `GET /workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}/chunks`; ground the question, then submit a response. Use actual API responses to populate identifiers. No static UUIDs or fabricated response bodies are provided here.
 
-```text
-302 passed
-8 skipped
-1 warning
-```
+## Configuration
 
----
+`.env.example` is the source of truth for Compose configuration. The table explains its current variables; values below are names/purposes, not secrets.
 
-## Run targeted questionnaire response tests
+| Variable | Required? | Purpose |
+|---|---|---|
+| `ENVIRONMENT` | No; defaults to `development` | Environment label passed to API container. |
+| `LOG_LEVEL` | No; defaults to `INFO` | API log level. |
+| `POSTGRES_DB` | Defaults to `evidenceforge` | Compose database name. |
+| `POSTGRES_USER` | Defaults to `evidenceforge` | Compose database user. |
+| `POSTGRES_PASSWORD` | Yes for Compose | Local database password; replace template value and keep private. |
+| `DATABASE_URL` | Yes for Compose | SQLAlchemy/psycopg connection string. Match its password with `POSTGRES_PASSWORD`; use host `db` in Compose. |
+| `NEXT_PUBLIC_API_BASE_URL` | Optional in `.env.example` | Template labels this as reserved; the current frontend rewrite does not read it. |
+| `EVIDENCEFORGE_API_URL` | Not listed in `.env.example` | `frontend/next.config.mjs` reads this to choose rewrite destination, defaulting to `http://127.0.0.1:8000`. Compose does not currently pass it to `web`; see troubleshooting. |
+
+Never paste a real token/password into the README, terminal capture, or a committed configuration file.
+
+## API reference
+
+All protected operations use `Authorization: Bearer $TOKEN`. The opaque token is provisioned out of band; there is no public registration/token-issuance route or supported development bootstrap command in this repository. The test fixture provisions ephemeral identities only inside isolated tests; see [First-run authentication prerequisite](#first-run-authentication-prerequisite). The API docs at `/docs` are generated from the running source and are the best place to inspect the complete schemas.
+
+| Method | Route | Purpose | Auth / role notes | Success and relevant failures |
+|---|---|---|---|---|
+| `GET` | `/health/live` | Process liveness. | Public. | 200; no database dependency check. |
+| `GET` | `/health/ready` | Database readiness. | Public. | 200 with database `ok`; 503 if DB unavailable. |
+| `POST` | `/workspaces` | Create workspace and owner membership. | Authenticated. | 201; schema validation failures. |
+| `GET` | `/workspaces` | List caller's memberships. | Authenticated. | 200. |
+| `GET`, `PATCH` | `/workspaces/{workspace_id}` | Read/update workspace. | Membership; update is owner/admin. | 200; nonmember/unknown workspace hidden as 404; role denial 403. |
+| `GET`, `POST` | `/workspaces/{workspace_id}/members` | List/add existing user memberships. | Member list requires membership; changes owner/admin. | 200/created response; role/validation errors. No public user registration. |
+| `PATCH`, `DELETE` | `/workspaces/{workspace_id}/members/{user_id}` | Change role/remove membership. | Owner/admin; owner-only restrictions apply. | 200/204; 403, 404, or 409 if last owner would be removed. |
+| `GET` | `/workspaces/{workspace_id}/audit-events` | List workspace audit events. | Workspace membership. | 200; workspace access checks apply. |
+| `POST`, `GET` | `/workspaces/{workspace_id}/documents` | Create/list evidence documents. | Read requires membership; writes OWNER/ADMIN/MEMBER. | 201/200; duplicate name 409. |
+| `POST` | `/workspaces/{workspace_id}/documents/{document_id}/versions` | Upload, normalize, chunk and persist version. | OWNER/ADMIN/MEMBER. | 201 new or 200 duplicate; 404, 413, 415, 422 on documented failure classes. |
+| `GET` | `/workspaces/{workspace_id}/documents/{document_id}` | Read one document. | Membership. | 200 or 404. |
+| `GET` | `/workspaces/{workspace_id}/documents/{document_id}/versions` | List versions. | Membership. | 200 or 404. |
+| `GET` | `/workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}` | Read version. | Membership. | 200 or 404. |
+| `GET` | `/workspaces/{workspace_id}/documents/{document_id}/versions/{version_id}/chunks` | Read chunks for version. | Membership. | 200 or 404. |
+| `POST` | `/workspaces/{workspace_id}/questionnaires/import` | Import/persist XLSX workbook. | OWNER/ADMIN/MEMBER. | 200; 413 too large, 415 unsupported type, 422 deterministic validation/persistence. |
+| `GET` | `/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/questions/{question_id}/grounding` | Retrieve authorized candidate evidence for question. | Workspace membership. | 200; 404 out-of-scope question, 422 invalid query. This is retrieval, not answer generation. |
+| `PUT`, `GET` | `/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/questions/{question_id}/response` | Create/revise or read response. | Write OWNER/ADMIN/MEMBER; only OWNER/ADMIN may set `APPROVED`. Read requires membership. | PUT 200; MEMBER approval 403; invalid/missing/foreign citation 422; resource outside scope 404. |
+| `GET` | `…/questions/{question_id}/response/history` | List immutable revisions and citations. | Workspace membership. | 200, or 404 if response absent/out of scope. |
+| `GET` | `/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/responses` | Latest response per question in version. | Workspace membership. | 200. |
+| `POST` | `/workspaces/{workspace_id}/questionnaires/{questionnaire_id}/versions/{questionnaire_version_id}/questions/{question_id}/review` | Apply explicit review decision using validated context. | OWNER/ADMIN/MEMBER; viewer is read-only. | 200; 403/404/422 for authorization, scope, or decision validation. |
+
+Route path abbreviations in this table are explanatory; copy full URLs from `/docs` when making requests. Workspace-scoped APIs derive tenant access from token membership, not a client-selected role field.
+
+### Response request example
+
+Payload schema in `backend/app/api/schemas.py` is `answer` (nullable string), required response `status`, and `citation_chunk_ids` (UUID list, default empty). This safe PowerShell example writes UTF-8 JSON to a temporary file and uses a placeholder token and IDs; replace values with real synthetic demo IDs locally.
 
 ```powershell
-python -m pytest -q backend/tests/questionnaires/test_questionnaire_responses.py
+$Base = 'http://localhost:8000'
+$WorkspaceId = '<workspace-uuid>'
+$QuestionnaireId = '<questionnaire-uuid>'
+$VersionId = '<questionnaire-version-uuid>'
+$QuestionId = '<question-version-question-uuid>'
+$ChunkId = '<evidence-chunk-uuid>'
+$env:TOKEN_ADMIN = '<locally-provisioned-token>'
+$Path = "/workspaces/$WorkspaceId/questionnaires/$QuestionnaireId/versions/$VersionId/questions/$QuestionId/response"
+$PayloadPath = Join-Path $env:TEMP 'evidenceforge-response.json'
+$Body = @{ answer = 'Synthetic answer supported by the cited evidence'; status = 'APPROVED'; citation_chunk_ids = @($ChunkId) } | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($PayloadPath, $Body, [System.Text.UTF8Encoding]::new($false))
+curl.exe -sS -i -X PUT "$Base$Path" -H "Authorization: Bearer $env:TOKEN_ADMIN" -H 'Content-Type: application/json' --data-binary "@$PayloadPath"
 ```
 
-```powershell
-python -m pytest -q backend/tests/questionnaires/test_questionnaire_responses_acceptance.py
-```
+Only a genuine API response establishes IDs, returned fields, and status. Remove temporary payload files only after you have inspected the result and ensured they contain no private data.
 
-PostgreSQL integration tests:
+## Authentication and workspace security
 
-```powershell
-python -m pytest -q backend/tests/questionnaires/test_questionnaire_responses_postgres.py
-```
+The API uses `HTTP Bearer` authentication. It hashes an opaque token to look up its database record and checks revocation, expiration, and active-user state. Authentication failures return 401; credentials are not provisioned by a public endpoint.
 
----
+For workspace routes, the server joins the requested workspace with the authenticated user's membership. It does not trust a role or workspace claim supplied in the request body. Unknown and non-member workspace IDs are both presented as `404 Workspace not found` to reduce workspace-existence disclosure. A known member lacking an operation role receives 403. Response operations allow OWNER, ADMIN, MEMBER; VIEWER is read-only. APPROVED response status is restricted to OWNER/ADMIN. Citation resolution requires evidence chunks in the authorized workspace.
 
-## Run Ruff
+![Authorization flow showing token validation, membership lookup, and role-gated workspace access](docs/assets/evidenceforge-workspace-authorization.svg)
+
+These are code-level controls, not a claim of penetration testing, production hardening, or independent certification.
+
+## Evidence, citations, and revisions
+
+A document can have immutable versions; versions contain normalized chunks. A chunk includes an index, content hash, normalized byte offsets, and optional section/page metadata. Response callers send chunk IDs; the server resolves those IDs and writes provenance records alongside the response revision.
+
+![Evidence document to immutable version to chunk to server-validated response citation provenance chain](docs/assets/evidenceforge-evidence-citation.svg)
+
+An identical response update returns the existing response state without adding another revision. A change creates the next immutable revision; history returns revisions with their citation records.
+
+![Idempotent response update versus changed response creating a new immutable revision](docs/assets/evidenceforge-response-lifecycle.svg)
+
+## Synthetic local demonstration
+
+The following results were provided as outcomes of a local synthetic demo. They are concrete example results—not a claim that this documentation run executed them, and not external security validation.
+
+| Scenario | Locally demonstrated result |
+|---|---|
+| XLSX import | HTTP 200; one question; version 1. |
+| Workspace A owner requests Workspace B resource | HTTP 404, `Workspace not found`. |
+| Workspace A MEMBER submits APPROVED response | HTTP 403 due to insufficient workspace role. |
+| ADMIN submits APPROVED without citation | HTTP 422, `Questionnaire response failed validation`. |
+| ADMIN approves with valid Workspace A citation | HTTP 200; revision 1. |
+| Exact same approval repeated | HTTP 200; same response and revision IDs; revision remains 1. |
+| Workspace B chunk used on Workspace A response | HTTP 422, `One or more citation targets are invalid`. |
+| Approved answer changed | HTTP 200; revision 2. |
+| History fetched | HTTP 200; both revisions and citation records. |
+| Liveness / readiness | Both HTTP 200; readiness database status `ok`. |
+
+These examples demonstrate specific API behavior only. They do not demonstrate model-generated answers, a complete generation pipeline, or production security. The repository's hybrid retrieval can surface evidence candidates; the human supplies and reviews response content.
+
+### Retrieval benchmark context
+
+The repository includes the fixed 60-case input definition in `backend/tests/evaluation/retrieval_cases.py`, metric/evaluation code, and historical method/result records in `docs/phase-2c-semantic-benchmark.md` and `docs/phase-2c-rrf-evaluation.md`. `backend/tests/evaluation/test_rrf_evaluation.py` recomputes the report and asserts the lexical and semantic baselines, hybrid case count, and isolation/injection measures; it can skip if the real semantic model is unavailable. It does **not** assert the exact hybrid nDCG value. The repository has a reproducible procedure and documented historical results, but no separate raw captured run artifact in this package and no benchmark was run for this documentation task.
+
+The following are the **historical three-way comparison** values in `docs/phase-2c-rrf-evaluation.md` (fixed 60-case corpus), not fresh measurements:
+
+| Retrieval configuration | Recall@5 | nDCG@5 | Leakage count | Injection inert rate | Injection candidates surfaced |
+|---|---:|---:|---:|---:|---:|
+| Lexical-only | 0.8333333333333334 | 0.9219567263864729 | 0 | 1.0 | 10 |
+| Semantic-only | 0.8333333333333334 | 0.953101098880283 | 0 | 1.0 | 10 |
+| Hybrid RRF | 0.8333333333333334 | 0.9616266072655447 | 0 | 1.0 | 10 |
+
+The earlier supplied rounded values Recall@5 `0.833` and nDCG@5 `0.922` correspond to the **lexical-only baseline**. Do not label `0.922` as hybrid RRF nDCG. The historical RRF report describes RRF as evaluation-only at that experiment's time; the inspected current source subsequently includes a production hybrid retriever used by question grounding. The historical metrics are not measurements of a current deployed runtime.
+
+The corpus/methodology and tests cover retrieval ranking and evidence-state handling, not answer correctness, generated-answer injection resistance, or production security. Injection inertness is an evaluation-path rate, not a general claim that evidence or prompts are universally safe. Re-run the documented evaluation in the target environment before describing current measured behavior.
+
+
+**Correct Abstention: N/A — generation layer not implemented.**
+
+## Testing and quality checks
+
+No tests were executed for this redesign. The project CI file defines Python lint/format/compile/unit tests, a PostgreSQL evidence persistence test, and frontend lint/typecheck/format/build jobs. To exercise authentication without provisioning the Compose database, use the repository test fixture with the in-memory test app; the generated token remains internal to the test process. Run locally and treat your own output as authoritative.
+
+Backend commands from repository root (install with `python -m pip install -e "backend[dev]"` first):
 
 ```powershell
 ruff check backend/app backend/tests backend/migrations
-```
-
----
-
-## Check Ruff formatting
-
-```powershell
 ruff format --check backend/app backend/tests backend/migrations
-```
-
----
-
-## Run mypy
-
-```powershell
-mypy backend/app
-```
-
----
-
-## Run Python compile checks
-
-```powershell
 python -m compileall -q backend
+python -m pytest -q
 ```
 
----
+The full pytest command includes tests that may need dedicated PostgreSQL configuration; consult `backend/tests/conftest.py` and the CI job. A PostgreSQL test URL must point to an isolated disposable test database, not your app or personal database. The workflow's pgvector-backed test uses `backend/tests/test_evidence_persistence_postgres.py` and a pgvector PostgreSQL service.
 
-## Check Git whitespace
-
-```powershell
-git diff --check
-```
-
-Line-ending conversion warnings from Git on Windows are not whitespace errors.
-
----
-
-## PostgreSQL integration testing
-
-The PostgreSQL response concurrency tests use a dedicated disposable PostgreSQL test database.
-
-Example test database URL:
+Frontend checks from `frontend/`:
 
 ```powershell
-$env:EVIDENCEFORGE_TEST_DATABASE_URL = "postgresql+psycopg://evidenceforge:EvidenceForgeTest123!@localhost:55432/evidenceforge_test"
-```
-
-Start the dedicated PostgreSQL test container when required:
-
-```powershell
-docker start evidenceforge-postgres-test
-```
-
-Run the PostgreSQL response tests:
-
-```powershell
-python -m pytest -q backend/tests/questionnaires/test_questionnaire_responses_postgres.py
-```
-
-The dedicated PostgreSQL test database is separate from the normal application database.
-
-Any destructive test-database operation must be limited to that dedicated disposable test database.
-
----
-
-## Frontend checks
-
-From the frontend directory:
-
-```powershell
-cd frontend
 npm ci
 npm run lint
 npm run typecheck
 npm run format:check
+npm run build
 ```
 
-Return to the repository root with:
-
-```powershell
-cd ..
-```
-
----
-
-## Repository structure
-
-```text
-EvidenceForge/
-├── backend/
-│   ├── app/
-│   │   ├── api/
-│   │   │   ├── routes/
-│   │   │   └── schemas.py
-│   │   ├── questionnaires/
-│   │   │   ├── persistence/
-│   │   │   ├── responses/
-│   │   │   └── ...
-│   │   ├── db.py
-│   │   └── main.py
-│   ├── migrations/
-│   │   └── versions/
-│   ├── tests/
-│   │   └── questionnaires/
-│   ├── alembic.ini
-│   └── pyproject.toml
-├── docs/
-├── frontend/
-├── compose.yaml
-├── .env.example
-└── README.md
-```
-
----
-
-## Problem
-
-Security and compliance teams repeatedly answer questionnaires using information distributed across approved policies, controls, procedures, and evidence documents.
-
-A useful workbench should reduce search and drafting effort without converting unsupported information into confident answers.
-
-When the available evidence is insufficient, the system should represent that condition explicitly rather than guessing.
-
----
-
-## Product boundary
-
-EvidenceForge is:
-
-- a local-first workspace and account model;
-- a security evidence persistence system;
-- a deterministic questionnaire import and persistence system;
-- a questionnaire response and revision system;
-- a provenance-aware citation system;
-- question review/workbench foundations;
-- a deterministic lexical retrieval and evaluation system; and
-- a foundation for future grounded drafting and human review workflows.
-
-EvidenceForge is not:
-
-- a generic chatbot;
-- a legal, compliance, or certification authority;
-- an autonomous questionnaire submitter;
-- a replacement for a GRC platform;
-- an unrestricted autonomous agent;
-- a system that certifies that an organization is compliant.
-
----
-
-## Design principles
-
-The project prioritizes:
-
-```text
-Correctness
-    ↓
-Security
-    ↓
-Determinism
-    ↓
-Database integrity
-    ↓
-Concurrency safety
-    ↓
-Reproducibility
-    ↓
-Developer experience
-```
-
-Feature velocity is intentionally secondary to correctness and auditability.
-
----
-
-## Current architectural boundaries
-
-The current implementation intentionally avoids treating future capabilities as implemented. The following are not yet available as an end-to-end workflow:
-
-- semantic/vector retrieval;
-- pgvector integration;
-- reciprocal-rank fusion (RRF);
-- bounded LLM generation;
-- generation schema validation;
-- semantic citation or grounding validation;
-- true end-to-end correct-abstention measurement;
-- end-to-end injection-escape measurement;
-- final human-reviewed export workflow;
-- hidden LLM calls;
-- unrestricted RAG;
-- automatic questionnaire submission;
-- autonomous tool execution;
-- autonomous network access;
-- automatic changes to evidence; and
-- automatic changes to questionnaire definitions.
-
-The current response layer is focused on:
-
-```text
-persistence
-    +
-provenance
-    +
-integrity
-    +
-authorization
-    +
-revision history
-```
-
-The current retrieval layer is deterministic and lexical. It is evaluated as retrieval and evidence-state behavior, not as generated-answer quality or end-to-end reviewer behavior.
-
----
-
-## Future grounded workflow
-
-The following is a future target workflow, not a claim about the current implementation:
-
-A later end-to-end workflow may evolve toward:
-
-```text
-Approved Evidence
-        ↓
-Questionnaire Import
-        ↓
-Question Validation
-        ↓
-Candidate Evidence Retrieval
-        ↓
-Evidence Selection
-        ↓
-Grounded Draft
-        ↓
-Schema + Citation Validation
-        ↓
-Human Review
-        ↓
-Accepted / Edited / Rejected
-        ↓
-Export
-```
-
-Any future answer-generation capability should remain bounded by evidence, schema validation, citation requirements, and human review.
-
----
-
-## Documentation
-
-Existing design documentation includes:
-
-| Document | Purpose |
-|---|---|
-| `docs/discovery.md` | Discovery findings, assumptions, and open questions |
-| `docs/problem-statement.md` | Problem framing, users, jobs, and requirements |
-| `docs/non-goals.md` | Explicit product and technical boundaries |
-| `docs/threat-model.md` | Assets, trust boundaries, threats, and controls |
-| `docs/evaluation-plan.md` | Evaluation corpus, metrics, and test methodology |
-| `docs/architecture.md` | Architecture, workflows, data model, and deployment |
-| `docs/discovery-interview-template.md` | Interview and evidence-gathering template |
-| `docs/adr/001-local-first.md` | Local-first deployment decision |
-| `docs/adr/002-retrieval-strategy.md` | Retrieval strategy decision |
-| `docs/adr/003-question-processing-state-machine.md` | Question-processing workflow decision |
-| `docs/adr/004-observability.md` | Observability and auditability decision |
-
-Some documentation describes proposed or future capabilities.
-
-Documentation describing future capabilities must not be interpreted as proof that those capabilities are already implemented.
-
----
-
-## Status vocabulary
-
-Technical response statuses currently include:
-
-```text
-PROPOSED
-APPROVED
-NEEDS_REVIEW
-INSUFFICIENT_EVIDENCE
-STALE_SOURCE
-CONFLICTING_SOURCES
-NOT_APPLICABLE
-DO_NOT_DISCLOSE
-```
-
-These represent response-level states and should not be confused with future workflow-level review outcomes.
-
-Future review workflows may introduce additional concepts such as:
-
-```text
-ACCEPTED
-EDITED_ACCEPTED
-REJECTED
-FAILED
-```
-
-Those concepts should only be treated as implemented once the corresponding workflow is present in the repository.
-
----
-
-## Explicitly deferred work
-
-The following areas are outside the current implemented slice:
-
-- semantic/vector retrieval;
-- pgvector integration;
-- reciprocal-rank fusion (RRF);
-- bounded LLM generation;
-- generation schema validation;
-- semantic citation or grounding validation;
-- true end-to-end correct-abstention measurement;
-- end-to-end injection-escape measurement;
-- final human-reviewed export workflow;
-- unrestricted web crawling;
-- Slack integrations;
-- Jira integrations;
-- MCP-based autonomous tooling;
-- multi-provider LLM routing;
-- SaaS billing;
-- automatic questionnaire submission;
-- enterprise SSO/SCIM;
-- Kubernetes deployment;
-- model fine-tuning; and
-- autonomous provisioning.
-
-The product and technical boundaries are documented in:
-
-```text
-docs/non-goals.md
-docs/threat-model.md
-docs/architecture.md
-```
-
----
-
-## Next phase
-
-The immediate next implementation phase is:
-
-**Phase 2C — Hybrid Retrieval**
-
-The intended comparison is:
-
-```text
-lexical-only
-semantic-only
-lexical + semantic + RRF
-```
-
-The purpose is to measure whether semantic retrieval actually improves the 60-case benchmark before productionizing fusion. Phase 2C is planned work; semantic retrieval, pgvector, and RRF are not implemented by this documentation update.
-
-The next implementation areas should be introduced incrementally and validated independently rather than combining retrieval, generation, integrations, and automation into a single large change.
-
----
-
-## Known limitations
-
-Current known limitations include:
-
-- one non-fatal Starlette/AnyIO deprecation warning in the installed test dependency stack;
-- PostgreSQL integration tests require the dedicated PostgreSQL test environment;
-- response persistence relies on the trusted API/service boundary for the explicit workspace role passed into mutation operations;
-- the evidence document/version/chunk foreign-key structure could be hardened further with stronger cross-table database-level evidence-chain constraints in a future phase;
-- semantic/vector retrieval, pgvector, and reciprocal-rank fusion are not implemented;
-- bounded LLM generation, generation schema validation, and semantic citation/grounding validation are not implemented;
-- true end-to-end correct-abstention and injection-escape measurement are unavailable; and
-- the final human-reviewed export workflow is not implemented.
-
-These limitations are documented engineering boundaries, not guarantees about every deployment environment.
-
----
-
-## Security notice
-
-EvidenceForge does not currently claim production security or organizational compliance certification.
-
-A production deployment requires appropriate protection of:
-
-- credentials;
-- PostgreSQL;
-- object or file storage;
-- network boundaries;
-- authentication infrastructure;
-- environment configuration;
-- audit data; and
-- deployment hosts.
-
-Threats such as a compromised host, malicious database administrator, compromised external provider, organizational policy failures, and deployment-specific configuration mistakes remain outside the guarantees of this repository.
-
-Security controls should be reviewed against the actual deployment environment before production use.
+The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector service. CI configuration is not evidence that a current run passed.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Safe diagnostic |
+|---|---|---|
+| Docker commands cannot connect | Docker Desktop/engine is stopped. | Start Docker Desktop; run `docker info` and `docker compose ps`. Do not delete volumes. |
+| `/health/live` works but `/health/ready` returns 503 | API cannot connect to configured database. | Inspect `docker compose logs --tail 100 db api`; compare `DATABASE_URL` host/user/database/password to Compose values; confirm `db` health. |
+| API container exits during start | Migration or DB connection failed. | Inspect API logs and `docker compose ps`; verify the `DATABASE_URL` and required PostgreSQL pgvector image. Do not reset database volume as a first response. |
+| Port 8000 or 3000 already occupied | Another local process binds the port. | Check with `Get-NetTCPConnection -LocalPort 8000,3000 -State Listen`; stop only a process you recognize or intentionally adjust a local port mapping. |
+| Protected request returns 401 | Missing, revoked, expired, or invalid token; inactive user. | Verify out-of-band token provisioning and pass `Authorization: Bearer $env:TOKEN_ADMIN`; never print the token. |
+| Request returns 404 for a known resource | Caller may not belong to that workspace, or an ID/version/question does not match. | Verify membership and IDs through authorized API calls; inaccessible workspaces are intentionally masked. |
+| Response update returns 403 | Membership role cannot perform the requested operation. | Confirm role; VIEWER cannot write and only OWNER/ADMIN can set status `APPROVED`. |
+| Response update returns 422 | Status-specific rule, malformed payload, duplicate/foreign/nonexistent citation. | Check request schema and obtain the chunk ID through the same workspace's evidence routes. |
+| XLSX import returns 415/422 | Wrong extension or workbook fails deterministic validation. | Use a synthetic `.xlsx` file and inspect API response; do not rename unrelated formats to `.xlsx`. |
+| Frontend is visible but API actions fail in Compose | `frontend/next.config.mjs` reads `EVIDENCEFORGE_API_URL` (default `http://127.0.0.1:8000`), while `compose.yaml` passes `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`). The rewrite ignores that Compose variable, so loopback inside `web` targets the web container, not `api`. | Test backend separately with `Invoke-RestMethod http://localhost:8000/health/live` and open `http://localhost:8000/docs`. Inspect browser DevTools Network and, if needed, only the non-secret value of `EVIDENCEFORGE_API_URL` in `web`; do not dump all environment variables. Fixing the mismatch needs a separate frontend/Compose config change, intentionally outside this docs package. |
+| Frontend npm check fails | Wrong Node/npm version, dependencies not installed, or lint/type issues. | Use Node 20 as CI does, run `npm ci` in `frontend`, then rerun one script at a time. |
+| PostgreSQL tests fail to connect or vector type is missing | Test DB is unavailable or lacks `vector` extension. | Follow `.github/workflows/ci.yml` service setup; use a separate pgvector test DB and only the test's documented env variable. |
+
+## Current status and limitations
+
+### Implemented foundations
+
+- Workspace/member authorization, opaque bearer auth, and audit records.
+- Evidence ingestion, immutable versions/chunks, and citation provenance.
+- Deterministic XLSX questionnaire import and persistence.
+- Workspace-scoped hybrid lexical/semantic retrieval with RRF in grounding code paths.
+- Response persistence, server-side approval rules, idempotent updates, history, and explicit review actions.
+
+### Partial or not independently verified here
+
+- Frontend is a focused workbench rather than a complete import/admin/reviewer operations suite.
+- Retrieval/embedding behavior depends on the configured environment and vector data; this documentation task did not run the benchmark or suite.
+- The Compose web API rewrite currently appears mismatched: `NEXT_PUBLIC_API_BASE_URL` is set by Compose but `next.config.mjs` reads `EVIDENCEFORGE_API_URL`.
+- Generation boundary schemas, mock/evaluation provider modules and related tests are not the same as a connected, end-to-end LLM answer-generation capability.
+
+### Not implemented as a complete product capability
+
+- Configured LLM response generation in an end-to-end API/user workflow.
+- A completed production review console or autonomous reviewer. The source has explicit human-triggered review API and workbench operations, but no model-created answer to review end-to-end.
+- Evidence export or automatic questionnaire submission.
+- A full chatbot interface.
+- Production deployment security certification or external audit.
+
+Semantic retrieval and RRF are present in current source; they must not be described as planned/not implemented based on older README text. Their presence does not imply answer generation or proven benchmark quality. Future work should verify reproducibility, failure handling, and deployment configuration before relying on these capabilities.
+
+## Contributing safely
+
+1. Inspect `git status --short` before edits so existing work remains yours.
+2. Make a focused change; do not include secrets, recordings, database files, caches, or generated artifacts.
+3. Run the relevant backend/frontend checks above and review their actual output.
+4. Review `git diff --check` and the full `git diff`; verify only intended files changed.
+5. Decide yourself whether and when to commit. This guide never stages, commits, or publishes changes automatically.
+
+## FAQ
+
+**Does EvidenceForge generate answers with an LLM?**
+
+Not end to end in the inspected source. Generation contracts/evaluation scaffolding exist, but this is not a configured answer-generation workflow.
+
+**Does it perform semantic retrieval or RRF?**
+
+Yes, the current source wires hybrid retrieval into question grounding and includes semantic/pgvector/RRF components. It retrieves candidates, not final answers. Verify embeddings and actual runtime/test behavior in your environment.
+
+**Can a MEMBER approve a response?**
+
+No. Response persistence allows OWNER/ADMIN/MEMBER writes, but setting `APPROVED` requires OWNER or ADMIN.
+
+**How do I get a local bearer token on first run?**
+
+The repository has no supported bootstrap command or Compose seeder. Tests use ephemeral in-memory fixtures only. Obtain the maintainer-approved out-of-band provisioning procedure before trying protected routes; do not manually insert token rows.
+
+**Is the frontend a complete product UI?**
+
+No. It is a focused workbench; import/admin workflows and broad product operations are not represented as finished screens.
+
+**Are the example status codes production guarantees?**
+
+No. Listed local demonstration outcomes are for synthetic local scenarios. The live API response and current code determine behavior.
+
+## Glossary
+
+- **API:** the HTTP interface applications use to call backend operations.
+- **Workspace:** membership-controlled boundary for a team's records.
+- **Evidence version:** immutable stored version of a source document.
+- **Evidence chunk:** addressable portion of normalized evidence, with provenance such as index, hash, and offsets.
+- **Citation:** server-resolved link from a response revision to an authorized evidence chunk.
+- **Idempotency:** repeating an identical update does not create a duplicate revision.
+- **Revision:** immutable snapshot of response content/status/citations at a point in time.
+- **Migration:** a versioned database-schema change applied by Alembic.
+- **RRF:** reciprocal-rank fusion, a method for combining ranked retrieval lists.
+- **Readiness:** a check that the API's database dependency is reachable, distinct from process liveness.
+
+## Further reading
+
+These repository documents exist at the inspected source revision; some describe designs or future goals rather than implemented features:
+
+- [`docs/architecture.md`](docs/architecture.md) — proposed architecture and boundaries.
+- [`docs/threat-model.md`](docs/threat-model.md) — threat analysis and controls.
+- [`docs/evaluation-plan.md`](docs/evaluation-plan.md) — evaluation approach.
+- [`docs/non-goals.md`](docs/non-goals.md) — explicit non-goals.
+- [`docs/phase-2c-production-hybrid-retrieval.md`](docs/phase-2c-production-hybrid-retrieval.md) — hybrid retrieval design/status record.
+- [`docs/phase-2d4-human-review-integration.md`](docs/phase-2d4-human-review-integration.md) — human review integration notes.
+- [`docs/phase-2e4b-generation-benchmark.md`](docs/phase-2e4b-generation-benchmark.md) — generation benchmark scaffolding/results; not proof of a shipped generation workflow.
+
+Start with `backend/app/main.py`, then inspect `backend/app/api/routes/`, the associated services/schemas, and their tests. For the UI, begin at `frontend/app/page.tsx`.
