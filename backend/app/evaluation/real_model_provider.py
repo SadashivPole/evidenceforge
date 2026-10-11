@@ -55,7 +55,7 @@ from app.evaluation.runtime_gate import (
 from app.questionnaires.generation.projection import (
     ModelGenerationInput,
 )
-from app.questionnaires.generation.schemas import GeneratedDraftPayload, MAX_CITED_HANDLES
+from app.questionnaires.generation.schemas import MAX_CITED_HANDLES, GeneratedDraftPayload
 from app.questionnaires.generation.types import GenerationContext
 from app.questionnaires.types import ResponseStatus
 
@@ -168,6 +168,7 @@ def redact_api_key(text: str, api_key: str | None) -> str:
         return text
     return text.replace(api_key, "[REDACTED_API_KEY]")
 
+
 def _safe_usage_copy(usage: dict[str, Any]) -> dict[str, Any]:
     """Copy only known token-usage fields from provider responses."""
     allowed = {
@@ -227,8 +228,7 @@ class RealModelProviderConfig:
         if not isinstance(self.base_url, str) or not self.base_url.strip():
             raise ValueError("base_url must not be empty")
         if self.health_path is not None and (
-            not isinstance(self.health_path, str)
-            or not self.health_path.startswith("/")
+            not isinstance(self.health_path, str) or not self.health_path.startswith("/")
         ):
             raise ValueError("health_path must start with '/'")
 
@@ -284,9 +284,7 @@ class RealModelProviderConfig:
                 ) from None
 
             if parsed.scheme not in {"http", "https"} or not hostname:
-                raise ValueError(
-                    "Provider URL must use http or https and include a hostname"
-                )
+                raise ValueError("Provider URL must use http or https and include a hostname")
 
         if not self.allow_non_loopback:
             for u in urls_to_check:
@@ -884,9 +882,7 @@ class OpenAICompatibleEvaluationAdapter(EvaluationModelAdapter):
             method="POST",
         )
 
-        effective_timeout = (
-            timeout_seconds if timeout_seconds > 0 else self.timeout_seconds
-        )
+        effective_timeout = timeout_seconds if timeout_seconds > 0 else self.timeout_seconds
         start_time = time.perf_counter()
         opener = _build_direct_http_opener()
         try:
@@ -916,15 +912,15 @@ class OpenAICompatibleEvaluationAdapter(EvaluationModelAdapter):
                         deterministic_harness_execution_latency_ms=0.0,
                         latency_ms=elapsed_ms,
                         failure_override=EvaluationFailureType.TRANSPORT_API_FAILURE,
-                        error_message="Provider response did not contain choices[0].message.content",
+                        error_message=(
+                            "Provider response did not contain choices[0].message.content"
+                        ),
                     )
 
                 # Store only allowlisted, non-secret response metadata.
                 usage_dict = data.get("usage")
                 self.last_usage = (
-                    _safe_usage_copy(usage_dict)
-                    if isinstance(usage_dict, dict)
-                    else None
+                    _safe_usage_copy(usage_dict) if isinstance(usage_dict, dict) else None
                 )
                 finish_reason = choice0.get("finish_reason") if isinstance(choice0, dict) else None
                 response_model = data.get("model")
@@ -964,9 +960,9 @@ class OpenAICompatibleEvaluationAdapter(EvaluationModelAdapter):
             error_msg = redact_api_key(str(exc), self.api_key)
             reason = exc.reason
             reason_text = str(reason).lower()
-            if isinstance(reason, (TimeoutError, socket.timeout)) or 'timed out' in reason_text:
+            if isinstance(reason, (TimeoutError, socket.timeout)) or "timed out" in reason_text:
                 failure_type = EvaluationFailureType.TIMEOUT
-            elif isinstance(reason, ConnectionRefusedError) or 'refused' in reason_text:
+            elif isinstance(reason, ConnectionRefusedError) or "refused" in reason_text:
                 failure_type = EvaluationFailureType.RUNTIME_UNAVAILABLE
             else:
                 failure_type = EvaluationFailureType.TRANSPORT_API_FAILURE
@@ -977,7 +973,9 @@ class OpenAICompatibleEvaluationAdapter(EvaluationModelAdapter):
             elif failure_type == EvaluationFailureType.RUNTIME_UNAVAILABLE:
                 error_message = f"OpenAI endpoint unavailable at {self.endpoint_url}: {error_msg}"
             else:
-                error_message = f"OpenAI transport request failed at {self.endpoint_url}: {error_msg}"
+                error_message = (
+                    f"OpenAI transport request failed at {self.endpoint_url}: {error_msg}"
+                )
             return EvaluationRawOutput(
                 raw_text=None,
                 deterministic_harness_execution_latency_ms=0.0,

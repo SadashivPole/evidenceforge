@@ -324,7 +324,8 @@ def test_proposed_plus_mixed_fresh_and_stale_evidence_rejected() -> None:
         validate_generated_draft(context, payload)
 
 
-# Blocker 3 - Requirement 6: INSUFFICIENT_EVIDENCE + stale/conflicting evidence -> accepted only without citations
+# Blocker 3 - Requirement 6: INSUFFICIENT_EVIDENCE + stale/conflicting evidence
+# -> accepted only without citations
 def test_insufficient_evidence_plus_stale_or_conflicting_evidence_rejected_when_cited() -> None:
     context = _make_context(
         evidence_count=1,

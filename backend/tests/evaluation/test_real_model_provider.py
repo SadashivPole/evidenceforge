@@ -176,6 +176,7 @@ def test_constructor_base_url_override_updates_endpoint_url() -> None:
     assert adapter.base_url == override_url
     assert adapter.endpoint_url == f"{override_url}/chat/completions"
 
+
 def test_ollama_adapter_rejects_non_loopback_endpoint() -> None:
     with pytest.raises(ValueError, match="loopback"):
         OllamaEvaluationAdapter(endpoint_url="https://example.com/api/generate")
@@ -529,29 +530,21 @@ def test_provider_requests_bypass_environment_proxies(monkeypatch) -> None:
         observed_handlers.append(handlers)
         return original_build_opener(*handlers)
 
-    monkeypatch.setattr(
-        urllib.request, "build_opener", recording_build_opener
-    )
+    monkeypatch.setattr(urllib.request, "build_opener", recording_build_opener)
 
     server = _TestServer()
     _start_server(server)
     try:
         adapter = _adapter(server.base_url, health_path="/health")
         adapter.check_health()
-        raw = asyncio.run(
-            adapter.generate_raw(_sample_input(), timeout_seconds=5)
-        )
+        raw = asyncio.run(adapter.generate_raw(_sample_input(), timeout_seconds=5))
         assert raw.raw_text is not None
 
         ollama_base_url = server.base_url.rsplit("/v1", 1)[0]
         server.response_payload["response"] = "ollama test output"
-        ollama = OllamaEvaluationAdapter(
-            endpoint_url=f"{ollama_base_url}/api/generate"
-        )
+        ollama = OllamaEvaluationAdapter(endpoint_url=f"{ollama_base_url}/api/generate")
         asyncio.run(ollama.load_model())
-        ollama_raw = asyncio.run(
-            ollama.generate_raw(_sample_input(), timeout_seconds=5)
-        )
+        ollama_raw = asyncio.run(ollama.generate_raw(_sample_input(), timeout_seconds=5))
         assert ollama_raw.raw_text == "ollama test output"
     finally:
         server.shutdown()
@@ -560,8 +553,7 @@ def test_provider_requests_bypass_environment_proxies(monkeypatch) -> None:
     assert len(observed_handlers) >= 2
     for handlers in observed_handlers:
         assert any(
-            isinstance(handler, urllib.request.ProxyHandler)
-            and handler.proxies == {}
+            isinstance(handler, urllib.request.ProxyHandler) and handler.proxies == {}
             for handler in handlers
         ), "Provider request unexpectedly uses environment proxy configuration"
 
@@ -578,9 +570,7 @@ def test_provider_requests_bypass_environment_proxies(monkeypatch) -> None:
         ({"health_path": "health"}, "health_path"),
     ],
 )
-def test_config_rejects_invalid_values(
-    overrides: dict[str, object], message: str
-) -> None:
+def test_config_rejects_invalid_values(overrides: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         RealModelProviderConfig(
             model_id="qwen2.5:1.5b",
@@ -611,13 +601,12 @@ def test_load_model_raises_when_configured_health_check_fails() -> None:
     _start_server(server)
     try:
         adapter = _adapter(server.base_url, health_path="/health")
-        with pytest.raises(
-            RuntimeError, match="Configured provider health check failed"
-        ):
+        with pytest.raises(RuntimeError, match="Configured provider health check failed"):
             asyncio.run(adapter.load_model())
     finally:
         server.shutdown()
         server.server_close()
+
 
 def test_legacy_config_defaults_preserve_timeout_and_health_behavior() -> None:
     config = RealModelProviderConfig()

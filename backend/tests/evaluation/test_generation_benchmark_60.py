@@ -244,18 +244,14 @@ async def test_keyword_support_rate_excludes_non_supported_cases() -> None:
     from dataclasses import replace
 
     supported_template = next(
-        case
-        for case in all_cases
-        if case.category == GenerationBenchmarkCategory.SUPPORTED
+        case for case in all_cases if case.category == GenerationBenchmarkCategory.SUPPORTED
     )
     supported_case = replace(
         supported_template,
         expected_keywords=("required-term-that-is-absent",),
     )
     non_supported_case = next(
-        case
-        for case in all_cases
-        if case.category != GenerationBenchmarkCategory.SUPPORTED
+        case for case in all_cases if case.category != GenerationBenchmarkCategory.SUPPORTED
     )
 
     artifact = await run_generation_benchmark_runner(
