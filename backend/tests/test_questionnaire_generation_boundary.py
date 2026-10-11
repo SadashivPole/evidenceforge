@@ -324,8 +324,8 @@ def test_proposed_plus_mixed_fresh_and_stale_evidence_rejected() -> None:
         validate_generated_draft(context, payload)
 
 
-# Blocker 3 - Requirement 6: INSUFFICIENT_EVIDENCE + stale/conflicting evidence -> accepted
-def test_insufficient_evidence_plus_stale_or_conflicting_evidence_accepted() -> None:
+# Blocker 3 - Requirement 6: INSUFFICIENT_EVIDENCE + stale/conflicting evidence -> accepted only without citations
+def test_insufficient_evidence_plus_stale_or_conflicting_evidence_rejected_when_cited() -> None:
     context = _make_context(
         evidence_count=1,
         document_status="superseded",
@@ -338,14 +338,13 @@ def test_insufficient_evidence_plus_stale_or_conflicting_evidence_accepted() -> 
         "citation_handles": ["EVIDENCE-1"],
     }
 
-    result = validate_generated_draft(context, payload)
-    assert result.validation_passed is True
-    assert result.status == ResponseStatus.INSUFFICIENT_EVIDENCE
-    assert result.citation_handles == ("EVIDENCE-1",)
-    assert len(result.resolved_citations) == 1
+    with pytest.raises(
+        GenerationStatusValidationError,
+        match="Abstentions must not cite supporting evidence handles",
+    ):
+        validate_generated_draft(context, payload)
 
 
-# Blocker 3 - Requirement 7: INSUFFICIENT_EVIDENCE + empty citations -> accepted
 def test_insufficient_evidence_plus_empty_citations_accepted() -> None:
     context = _make_context(evidence_count=0)
     payload = {

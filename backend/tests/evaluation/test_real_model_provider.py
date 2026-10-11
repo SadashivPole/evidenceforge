@@ -15,6 +15,7 @@ import pytest
 
 from app.evaluation.real_model_provider import (
     LoopbackOpenAICompatibleRuntimeAdapter,
+    OllamaEvaluationAdapter,
     RealModelProviderConfig,
     build_generation_messages,
 )
@@ -161,6 +162,25 @@ def _adapter(base_url: str, **kwargs: object) -> LoopbackOpenAICompatibleRuntime
     return LoopbackOpenAICompatibleRuntimeAdapter(_sample_spec(), config)
 
 
+def test_constructor_base_url_override_updates_endpoint_url() -> None:
+    original_url = "http://127.0.0.1:11434/v1"
+    override_url = "http://127.0.0.1:11435/v1"
+
+    config = RealModelProviderConfig(
+        base_url=original_url,
+        model_id="probe-model",
+    )
+
+    adapter = LoopbackOpenAICompatibleRuntimeAdapter(override_url, config)
+
+    assert adapter.base_url == override_url
+    assert adapter.endpoint_url == f"{override_url}/chat/completions"
+
+def test_ollama_adapter_rejects_non_loopback_endpoint() -> None:
+    with pytest.raises(ValueError, match="loopback"):
+        OllamaEvaluationAdapter(endpoint_url="https://example.com/api/generate")
+
+
 def test_loopback_url_accepts_allowed_hosts() -> None:
     for host in ("127.0.0.1", "localhost", "[::1]"):
         config = RealModelProviderConfig(
@@ -222,6 +242,15 @@ def test_request_shape_and_json_schema_mode() -> None:
     assert response_format["json_schema"]["strict"] is True
     response_schema = response_format["json_schema"]["schema"]
     assert response_schema["additionalProperties"] is False
+    assert response_schema["required"] == [
+        "status",
+        "answer",
+        "citation_handles",
+        "uncertainty_notes",
+    ]
+    assert "oneOf" not in response_schema
+    assert "anyOf" not in response_schema
+    assert response_schema["properties"]["citation_handles"]["maxItems"] == 5
     assert response_schema["properties"]["status"]["enum"] == [
         "PROPOSED",
         "INSUFFICIENT_EVIDENCE",
@@ -339,6 +368,23 @@ def test_connection_refused_classification(monkeypatch: pytest.MonkeyPatch) -> N
     assert raw.raw_text is None
 
 
+def test_urlerror_timeout_classification(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _TimedOutOpener:
+        def open(self, *_args: object, **_kwargs: object) -> object:
+            raise urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(
+        urllib.request,
+        "build_opener",
+        lambda *_a, **_k: _TimedOutOpener(),
+    )
+    adapter = _adapter("http://127.0.0.1:11434/v1")
+    raw = asyncio.run(adapter.generate_raw(_sample_input(), timeout_seconds=0.5))
+
+    assert raw.failure_override == EvaluationFailureType.TIMEOUT
+    assert raw.raw_text is None
+
+
 def test_malformed_model_json_flows_unchanged_to_boundary() -> None:
     server = _TestServer()
     server.response_payload["choices"][0]["message"]["content"] = '{"answer":'
@@ -351,6 +397,21 @@ def test_malformed_model_json_flows_unchanged_to_boundary() -> None:
         server.server_close()
 
     assert raw.raw_text == '{"answer":'
+
+
+def test_missing_message_content_is_transport_failure() -> None:
+    server = _TestServer()
+    server.response_payload["choices"][0]["message"].pop("content")
+    _start_server(server)
+    try:
+        adapter = _adapter(server.base_url)
+        raw = asyncio.run(adapter.generate_raw(_sample_input(), timeout_seconds=5))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert raw.failure_override == EvaluationFailureType.TRANSPORT_API_FAILURE
+    assert raw.raw_text is None
 
 
 def test_api_error_is_transport_failure_and_no_retry() -> None:
@@ -382,6 +443,31 @@ def test_api_key_sent_and_not_exposed_by_error_text() -> None:
     assert "super-secret-test-key" not in adapter.last_response_metadata.__repr__()
 
 
+def test_response_metadata_and_usage_are_allowlisted() -> None:
+    server = _TestServer()
+    server.response_payload["debug_secret"] = "unexpected-sensitive-value"
+    server.response_payload["usage"]["secret"] = "unexpected-usage-value"
+    _start_server(server)
+    try:
+        adapter = _adapter(server.base_url)
+        raw = asyncio.run(adapter.generate_raw(_sample_input(), timeout_seconds=5))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert raw.raw_text is not None
+    assert adapter.last_response_metadata == {"model": "qwen2.5:1.5b", "finish_reason": "stop"}
+    assert adapter.last_usage is not None
+    assert set(adapter.last_usage) == {
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "prompt_tokens_details",
+    }
+    assert "unexpected-sensitive-value" not in repr(adapter.last_response_metadata)
+    assert "unexpected-usage-value" not in repr(adapter.last_usage)
+
+
 def test_no_retry_on_timeout() -> None:
     server = _TestServer()
     server.response_delay_seconds = 0.4
@@ -395,3 +481,174 @@ def test_no_retry_on_timeout() -> None:
 
     assert raw.failure_override == EvaluationFailureType.TIMEOUT
     assert server.requests_seen == 1
+
+
+def test_loopback_guard_rejects_127_prefix_lookalikes() -> None:
+    for url in (
+        "http://127.999.0.1:11434/v1",
+        "http://127.0.0.1.evil.example:11434/v1",
+        "http://localhost.evil.example:11434/v1",
+    ):
+        with pytest.raises(ValueError, match="loopback"):
+            RealModelProviderConfig(
+                base_url=url,
+                model_id="qwen2.5:1.5b",
+            )
+
+
+def test_provider_url_syntax_is_checked_when_non_loopback_is_allowed() -> None:
+    for url in (
+        "ftp://localhost:11434/v1",
+        "http:///v1",
+    ):
+        with pytest.raises(ValueError, match="Provider URL"):
+            RealModelProviderConfig(
+                base_url=url,
+                model_id="qwen2.5:1.5b",
+                allow_non_loopback=True,
+            )
+
+
+def test_valid_non_loopback_url_can_be_explicitly_allowed() -> None:
+    config = RealModelProviderConfig(
+        base_url="https://example.com/v1",
+        model_id="qwen2.5:1.5b",
+        allow_non_loopback=True,
+    )
+    assert config.base_url == "https://example.com/v1"
+
+
+def test_provider_requests_bypass_environment_proxies(monkeypatch) -> None:
+    import asyncio
+    import urllib.request
+
+    original_build_opener = urllib.request.build_opener
+    observed_handlers = []
+
+    def recording_build_opener(*handlers):
+        observed_handlers.append(handlers)
+        return original_build_opener(*handlers)
+
+    monkeypatch.setattr(
+        urllib.request, "build_opener", recording_build_opener
+    )
+
+    server = _TestServer()
+    _start_server(server)
+    try:
+        adapter = _adapter(server.base_url, health_path="/health")
+        adapter.check_health()
+        raw = asyncio.run(
+            adapter.generate_raw(_sample_input(), timeout_seconds=5)
+        )
+        assert raw.raw_text is not None
+
+        ollama_base_url = server.base_url.rsplit("/v1", 1)[0]
+        server.response_payload["response"] = "ollama test output"
+        ollama = OllamaEvaluationAdapter(
+            endpoint_url=f"{ollama_base_url}/api/generate"
+        )
+        asyncio.run(ollama.load_model())
+        ollama_raw = asyncio.run(
+            ollama.generate_raw(_sample_input(), timeout_seconds=5)
+        )
+        assert ollama_raw.raw_text == "ollama test output"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert len(observed_handlers) >= 2
+    for handlers in observed_handlers:
+        assert any(
+            isinstance(handler, urllib.request.ProxyHandler)
+            and handler.proxies == {}
+            for handler in handlers
+        ), "Provider request unexpectedly uses environment proxy configuration"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"timeout_seconds": 0}, "timeout_seconds"),
+        ({"max_output_tokens": 0}, "max_output_tokens"),
+        ({"max_tokens": 0}, "max_tokens"),
+        ({"temperature": -0.01}, "temperature"),
+        ({"temperature": 2.01}, "temperature"),
+        ({"base_url": "   "}, "base_url"),
+        ({"health_path": "health"}, "health_path"),
+    ],
+)
+def test_config_rejects_invalid_values(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        RealModelProviderConfig(
+            model_id="qwen2.5:1.5b",
+            **overrides,
+        )
+
+
+@pytest.mark.parametrize("temperature", [0.0, 2.0])
+def test_config_accepts_temperature_boundaries(temperature: float) -> None:
+    config = RealModelProviderConfig(
+        model_id="qwen2.5:1.5b",
+        temperature=temperature,
+    )
+    assert config.temperature == temperature
+
+
+def test_none_health_path_skips_health_request() -> None:
+    adapter = _adapter(
+        "http://127.0.0.1:11434/v1",
+        health_path=None,
+    )
+    assert adapter.check_health() is True
+
+
+def test_load_model_raises_when_configured_health_check_fails() -> None:
+    server = _TestServer()
+    server.health_status = 503
+    _start_server(server)
+    try:
+        adapter = _adapter(server.base_url, health_path="/health")
+        with pytest.raises(
+            RuntimeError, match="Configured provider health check failed"
+        ):
+            asyncio.run(adapter.load_model())
+    finally:
+        server.shutdown()
+        server.server_close()
+
+def test_legacy_config_defaults_preserve_timeout_and_health_behavior() -> None:
+    config = RealModelProviderConfig()
+    assert config.timeout_seconds == 60.0
+    assert config.health_path is None
+
+
+def test_legacy_config_positional_argument_order_is_preserved() -> None:
+    config = RealModelProviderConfig(
+        "http://127.0.0.1:8000/v1",
+        "legacy-model",
+        "test-api-key",
+        42.0,
+        0.5,
+        512,
+        None,
+        True,
+        "json_object",
+        False,
+    )
+
+    assert config.base_url == "http://127.0.0.1:8000/v1"
+    assert config.model_id == "legacy-model"
+    assert config.model_name == "legacy-model"
+    assert config.api_key == "test-api-key"
+    assert config.timeout_seconds == 42.0
+    assert config.temperature == 0.5
+    assert config.max_output_tokens == 512
+    assert config.max_tokens == 512
+    assert config.health_path is None
+    assert config.json_mode is True
+    assert config.response_format_mode == "json_object"
+    assert config.allow_non_loopback is False
+    assert config.endpoint_url == "http://127.0.0.1:8000/v1/chat/completions"

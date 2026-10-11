@@ -204,6 +204,13 @@ def validate_generated_draft(
                 "Model returned status PROPOSED with an empty answer."
             )
 
+    elif parsed.status == ResponseStatus.INSUFFICIENT_EVIDENCE:
+        if parsed.citation_handles:
+            raise GenerationStatusValidationError(
+                "Model returned status INSUFFICIENT_EVIDENCE with citation handles. "
+                "Abstentions must not cite supporting evidence handles."
+            )
+
     return ValidatedDraftResponse(
         question_id=context.question_id,
         workspace_id=context.authorized_workspace_id,
