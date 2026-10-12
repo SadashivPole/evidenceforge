@@ -259,8 +259,8 @@ After successful imports, use the returned questionnaire/version/question and ev
 | `POSTGRES_USER` | Defaults to `evidenceforge` | Compose database user. |
 | `POSTGRES_PASSWORD` | Yes for Compose | Local database password; replace template value and keep private. |
 | `DATABASE_URL` | Yes for Compose | SQLAlchemy/psycopg connection string. Match its password with `POSTGRES_PASSWORD`; use host `db` in Compose. |
-| `NEXT_PUBLIC_API_BASE_URL` | Optional in `.env.example` | Template labels this as reserved; the current frontend rewrite does not read it. |
-| `EVIDENCEFORGE_API_URL` | Not listed in `.env.example` | `frontend/next.config.mjs` reads this to choose rewrite destination, defaulting to `http://127.0.0.1:8000`. Compose does not currently pass it to `web`; see troubleshooting. |
+| `EVIDENCEFORGE_API_URL` | No; Compose defaults to `http://api:8000` | Server-side destination used by the Next.js rewrite in `frontend/next.config.mjs`; the `api` hostname resolves to the API service on the Compose network. |
+
 
 Never paste a real token/password into the README, terminal capture, or a committed configuration file.
 
@@ -412,7 +412,7 @@ The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector s
 | Response update returns 403 | Membership role cannot perform the requested operation. | Confirm role; VIEWER cannot write and only OWNER/ADMIN can set status `APPROVED`. |
 | Response update returns 422 | Status-specific rule, malformed payload, duplicate/foreign/nonexistent citation. | Check request schema and obtain the chunk ID through the same workspace's evidence routes. |
 | XLSX import returns 415/422 | Wrong extension or workbook fails deterministic validation. | Use a synthetic `.xlsx` file and inspect API response; do not rename unrelated formats to `.xlsx`. |
-| Frontend is visible but API actions fail in Compose | `frontend/next.config.mjs` reads `EVIDENCEFORGE_API_URL` (default `http://127.0.0.1:8000`), while `compose.yaml` passes `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`). The rewrite ignores that Compose variable, so loopback inside `web` targets the web container, not `api`. | Test backend separately with `Invoke-RestMethod http://localhost:8000/health/live` and open `http://localhost:8000/docs`. Inspect browser DevTools Network and, if needed, only the non-secret value of `EVIDENCEFORGE_API_URL` in `web`; do not dump all environment variables. Fixing the mismatch needs a separate frontend/Compose config change, intentionally outside this docs package. |
+| Frontend is visible but API actions fail in Compose | The Next.js rewrite uses `EVIDENCEFORGE_API_URL`, which Compose now defaults to `http://api:8000`. Runtime connectivity still needs verification. | Run `docker compose ps` and `docker compose logs --tail 100 api web`. Test `Invoke-RestMethod http://localhost:8000/health/live` and `Invoke-RestMethod http://localhost:3000/backend-api/health/live`. Inspect browser DevTools Network and only the non-secret API URL value if needed. |
 | Frontend npm check fails | Wrong Node/npm version, dependencies not installed, or lint/type issues. | Use Node 20 as CI does, run `npm ci` in `frontend`, then rerun one script at a time. |
 | PostgreSQL tests fail to connect or vector type is missing | Test DB is unavailable or lacks `vector` extension. | Follow `.github/workflows/ci.yml` service setup; use a separate pgvector test DB and only the test's documented env variable. |
 
@@ -430,7 +430,7 @@ The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector s
 
 - Frontend is a focused workbench rather than a complete import/admin/reviewer operations suite.
 - Retrieval/embedding behavior depends on the configured environment and vector data; this documentation task did not run the benchmark or suite.
-- The Compose web API rewrite currently appears mismatched: `NEXT_PUBLIC_API_BASE_URL` is set by Compose but `next.config.mjs` reads `EVIDENCEFORGE_API_URL`.
+- The Compose web API rewrite now receives `EVIDENCEFORGE_API_URL` with default `http://api:8000`; runtime connectivity has not yet been verified against a running Compose stack.
 - Generation boundary schemas, mock/evaluation provider modules and related tests are not the same as a connected, end-to-end LLM answer-generation capability.
 
 ### Not implemented as a complete product capability
