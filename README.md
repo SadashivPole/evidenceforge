@@ -194,15 +194,15 @@ Open `http://localhost:8000/docs` for FastAPI's generated API documentation and 
 
 ### First-run authentication prerequisite
 
-The repository does **not** provide a supported first-user bootstrap, token-issuance CLI, development seeder, or public registration endpoint. `backend/app/auth.py` explicitly treats tokens as provisioned out of band. A brand-new Compose database can start and answer public health requests, but a developer cannot complete protected API/workbench workflows using only the documented Compose commands. Once an approved process has provisioned the first user and token, `POST /workspaces` creates a workspace and grants its caller the OWNER membership; OWNER/ADMIN can add an already-existing user through the membership route. The API has no route to create that initial user or issue its token.
+The repository provides an operator-only, one-time first-user bootstrap CLI; it does not expose a public registration or token-issuance endpoint. See the [First-user bootstrap operator runbook](docs/bootstrap-operator-runbook.md) for the guarded provisioning procedure. A brand-new Compose database can start and answer public health requests, but protected API/workbench workflows require an authorized operator to run the bootstrap against the intended PostgreSQL database after migrations are current. The bootstrap creates the initial user, workspace, OWNER membership, hashed bearer-token record, and audit event. Afterward, `POST /workspaces` can create additional workspaces for the authenticated caller; OWNER/ADMIN can add an already-existing user through the membership route.
 
-Consequently, there is no supported clean-machine procedure in this repository for creating the first local user/token or for making the first authenticated workspace. The protected request examples below are not immediately executable against a fresh Compose database until an authorized provisioning path exists. The supported test-fixture path is for tests only: `backend/tests/conftest.py` creates a temporary user, random bearer token, and workspace owner membership in an in-memory SQLite test app. The tests keep that token in process and do not print it. Run the focused auth/security tests from the backend setup to exercise that path:
+Use the [First-user bootstrap operator runbook](docs/bootstrap-operator-runbook.md) for the supported clean-machine procedure to create the first local user, workspace, owner membership, and token. The protected request examples below require that one-time operator step before they can succeed against a fresh Compose database. The supported test-fixture path remains separate and is for tests only: `backend/tests/conftest.py` creates a temporary user, random bearer token, and workspace owner membership in an in-memory SQLite test app. The tests keep that token in process and do not print it. Run the focused auth/security tests from the backend setup to exercise that test-only path:
 
 ```powershell
 python -m pytest -q backend/tests/test_security_boundary.py
 ```
 
-This does not provision an account or token in the Compose database. For a protected local API demo, obtain an approved development provisioning procedure from the project maintainer/deployment owner. Do not create token rows manually or copy fixture tokens into the running app. Keep any token issued through an approved out-of-band mechanism in a process-scoped environment variable, such as `$env:TOKEN_ADMIN`; never echo it or commit it. After provisioning, verify the token using `GET /workspaces`; an empty list means authentication succeeded but no workspace membership exists yet. Create a workspace with `POST /workspaces` to make the authenticated caller its OWNER, then verify it appears in `GET /workspaces`. Without the provisioning procedure, treat protected API examples below as request templates only.
+This does not provision an account or token in the Compose database. For a protected local API demo, follow the operator runbook and verify that the command targets the intended PostgreSQL database before proceeding. Do not create token rows manually or copy fixture tokens into the running app. Store the one-time token output securely and, when needed, pass it through a process-scoped environment variable such as `$env:TOKEN_ADMIN`; never echo it or commit it. The bootstrap creates the initial workspace and OWNER membership; verify authentication using `GET /workspaces` and confirm the bootstrap-created workspace is returned. Without completing the documented bootstrap procedure, treat protected API examples below as request templates only.
 
 To inspect startup logs without tearing down services:
 
@@ -266,7 +266,7 @@ Never paste a real token/password into the README, terminal capture, or a commit
 
 ## API reference
 
-All protected operations use `Authorization: Bearer $TOKEN`. The opaque token is provisioned out of band; there is no public registration/token-issuance route or supported development bootstrap command in this repository. The test fixture provisions ephemeral identities only inside isolated tests; see [First-run authentication prerequisite](#first-run-authentication-prerequisite). The API docs at `/docs` are generated from the running source and are the best place to inspect the complete schemas.
+All protected operations use `Authorization: Bearer $TOKEN`. The opaque token is provisioned out of band; there is no public registration/token-issuance route. Initial provisioning is an operator-only, one-time operation; see the [First-user bootstrap operator runbook](docs/bootstrap-operator-runbook.md). The test fixture provisions ephemeral identities only inside isolated tests; see [First-run authentication prerequisite](#first-run-authentication-prerequisite). The API docs at `/docs` are generated from the running source and are the best place to inspect the complete schemas.
 
 | Method | Route | Purpose | Auth / role notes | Success and relevant failures |
 |---|---|---|---|---|
@@ -467,7 +467,7 @@ No. Response persistence allows OWNER/ADMIN/MEMBER writes, but setting `APPROVED
 
 **How do I get a local bearer token on first run?**
 
-The repository has no supported bootstrap command or Compose seeder. Tests use ephemeral in-memory fixtures only. Obtain the maintainer-approved out-of-band provisioning procedure before trying protected routes; do not manually insert token rows.
+Use the operator-only, one-time CLI documented in the [First-user bootstrap operator runbook](docs/bootstrap-operator-runbook.md). It provisions the first user, workspace, OWNER membership, token, and audit event in a guarded PostgreSQL transaction. Verify the database target and migration state first, capture the token securely when it is shown once, and do not repeat a successful bootstrap or insert token rows manually. Tests use ephemeral in-memory fixtures only; those tokens do not authenticate against the Compose database.
 
 **Is the frontend a complete product UI?**
 
