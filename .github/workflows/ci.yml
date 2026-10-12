@@ -39,8 +39,8 @@ jobs:
       - name: Compile backend
         run: python -m compileall -q backend
 
-      - name: Run backend tests
-        run: python -m pytest -q
+      - name: Run backend unit tests
+        run: python -m pytest -q --ignore=backend/tests/test_bootstrap_postgres.py
 
   backend-postgresql:
     name: Backend PostgreSQL concurrency
@@ -124,3 +124,65 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+  backend-postgresql-bootstrap:
+    name: Backend PostgreSQL bootstrap and authentication
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: evidenceforge
+          POSTGRES_PASSWORD: evidenceforge
+          POSTGRES_DB: evidenceforge_bootstrap_it_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U evidenceforge -d evidenceforge_bootstrap_it_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install backend development dependencies
+        run: python -m pip install -e "backend[dev]"
+
+      - name: Enable pgvector extension
+        env:
+          EVIDENCEFORGE_BOOTSTRAP_TEST_DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@localhost:5432/evidenceforge_bootstrap_it_ci
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+
+          engine = create_engine(os.environ["EVIDENCEFORGE_BOOTSTRAP_TEST_DATABASE_URL"])
+          try:
+              with engine.begin() as connection:
+                  connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+          finally:
+              engine.dispose()
+          PY
+
+      - name: Apply Alembic migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@localhost:5432/evidenceforge_bootstrap_it_ci
+        run: python -m alembic upgrade head
+
+      - name: Run bootstrap, concurrency, rollback, and authentication integration test
+        working-directory: backend
+        env:
+          CI: "true"
+          DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@localhost:5432/evidenceforge_bootstrap_it_ci
+          EVIDENCEFORGE_BOOTSTRAP_TEST_DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@localhost:5432/evidenceforge_bootstrap_it_ci
+        run: python -m pytest -q tests/test_bootstrap_postgres.py

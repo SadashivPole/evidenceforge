@@ -4,9 +4,10 @@ from collections.abc import Generator
 
 from fastapi import Request
 from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import ConnectionPoolEntry, StaticPool
 
 from app.config import Settings
 
@@ -23,7 +24,9 @@ def create_db_engine(settings: Settings) -> Engine:
         )
 
         @event.listens_for(engine, "connect")
-        def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+        def _enable_sqlite_foreign_keys(
+            dbapi_connection: DBAPIConnection, _connection_record: ConnectionPoolEntry
+        ) -> None:
             """Keep SQLite integrity checks aligned with PostgreSQL behavior."""
 
             cursor = dbapi_connection.cursor()
