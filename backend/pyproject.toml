@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 evidenceforge-bootstrap = "app.cli.bootstrap:main"
+evidenceforge-operator-recovery = "app.cli.operator_recovery:main"
 
 [project.optional-dependencies]
 dev = [
