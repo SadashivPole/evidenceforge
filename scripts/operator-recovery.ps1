@@ -662,6 +662,18 @@ catch {
     $scriptExitCode = 2
 }
 finally {
+    # Preserve the recovery outcome before cleanup can overwrite it. Exit-code
+    # contract: 0 = success; 1 = operational failure (outcome uncertain; verify
+    # the target state read-only before retrying); 2 = launcher or recovery CLI
+    # refusal; 3 = recovery reported success but staging cleanup failed or
+    # could not be verified. A cleanup problem after a nonzero outcome must
+    # never rewrite that outcome. Exit 2 is also emitted by the generic catch
+    # above for unexpected launcher or Docker errors, so the code 2 alone does
+    # not establish whether a write occurred; examine the diagnostic output
+    # and verify the database state read-only whenever the outcome is
+    # uncertain.
+    $recoveryExitCode = $scriptExitCode
+    $cleanupFailure = $null
     if ($recoveryStageVolumeCleanupArmed -and $recoveryStageVolumeCandidate -and $targetProfile -and $targetProfile.docker_context) {
         $cleanupInspectOutput = & docker --context ([string]$targetProfile.docker_context) volume inspect $recoveryStageVolumeCandidate 2>$null
         if ($LASTEXITCODE -eq 0) {
@@ -674,24 +686,35 @@ finally {
                     $volumeRemoveArgs = @('--context', [string]$targetProfile.docker_context, 'volume', 'rm', $recoveryStageVolumeCandidate)
                     & docker @volumeRemoveArgs 2>$null | Out-Null
                     if ($LASTEXITCODE -ne 0) {
-                        [Console]::Error.WriteLine('WARNING: temporary recovery staging volume cleanup failed; inspect the uniquely named volume before proceeding.')
-                        $scriptExitCode = 2
+                        [Console]::Error.WriteLine("WARNING: staging volume removal failed for '$recoveryStageVolumeCandidate'; verify it with 'docker --context $($targetProfile.docker_context) volume inspect $recoveryStageVolumeCandidate' (expected driver 'local' and label io.evidenceforge.recovery-staging=true), then remove that exact same volume with 'docker --context $($targetProfile.docker_context) volume rm $recoveryStageVolumeCandidate' after review.")
+                        $cleanupFailure = 'staging volume removal failed'
                     }
                 }
                 else {
-                    [Console]::Error.WriteLine('WARNING: staging-volume identity changed; refusing to remove an unverified volume.')
-                    $scriptExitCode = 2
+                    [Console]::Error.WriteLine("WARNING: staging volume identity changed for '$recoveryStageVolumeCandidate'; do NOT delete this volume until you have positively identified it with 'docker --context $($targetProfile.docker_context) volume inspect $recoveryStageVolumeCandidate' (expected driver 'local' and label io.evidenceforge.recovery-staging=true); if identification fails, leave it in place and escalate.")
+                    $cleanupFailure = 'staging volume identity changed'
                 }
             }
             catch {
-                [Console]::Error.WriteLine('WARNING: staging-volume cleanup could not be verified.')
-                $scriptExitCode = 2
+                [Console]::Error.WriteLine("WARNING: staging volume cleanup could not be verified for '$recoveryStageVolumeCandidate'; run 'docker --context $($targetProfile.docker_context) volume inspect $recoveryStageVolumeCandidate' and confirm driver 'local' plus label io.evidenceforge.recovery-staging=true before removing anything.")
+                $cleanupFailure = 'staging volume cleanup could not be verified'
             }
         }
         else {
-            [Console]::Error.WriteLine('WARNING: staging-volume cleanup status could not be verified.')
-            $scriptExitCode = 2
+            [Console]::Error.WriteLine("WARNING: staging volume cleanup status could not be verified for '$recoveryStageVolumeCandidate'; run 'docker --context $($targetProfile.docker_context) volume inspect $recoveryStageVolumeCandidate' and confirm driver 'local' plus label io.evidenceforge.recovery-staging=true before removing anything.")
+            $cleanupFailure = 'staging volume cleanup status could not be verified'
         }
+    }
+    if ($null -ne $cleanupFailure) {
+        if ($recoveryExitCode -eq 0) {
+            [Console]::Error.WriteLine('WARNING: recovery reported success, but staging cleanup failed or could not be verified (exit 3 = committed-but-cleanup-failed).')
+            $scriptExitCode = 3
+        }
+        else {
+            [Console]::Error.WriteLine("WARNING: ${cleanupFailure}; recovery outcome preserved as exit ${recoveryExitCode}.")
+            $scriptExitCode = $recoveryExitCode
+        }
+        [Console]::Error.WriteLine("Staging volume requiring review: $recoveryStageVolumeCandidate")
     }
     if ($stageScriptPath -and (Test-Path -LiteralPath $stageScriptPath)) {
         Remove-Item -LiteralPath $stageScriptPath -Force -ErrorAction SilentlyContinue
