@@ -221,4 +221,15 @@ Describe 'EvidenceForge operator-recovery launcher static contract' {
         $invalidFixture = $launcherSource + "`r`nexit 2"
         (([regex]::Matches($invalidFixture, $exitPattern)).Count -ge 1) | Should Be $true
     }
+    It 'reserves exit 3 for committed-but-cleanup-failed; raw CLI exit 3 is remapped to exit 1' {
+        $preserveIndex = $launcherSource.IndexOf('$recoveryExitCode = $scriptExitCode', [System.StringComparison]::Ordinal)
+        ($preserveIndex -ge 0) | Should Be $true
+        $remapIndex = $launcherSource.IndexOf('if ($recoveryExitCode -eq 3) {', [System.StringComparison]::Ordinal)
+        ($remapIndex -gt $preserveIndex) | Should Be $true
+        $cleanupInitIndex = $launcherSource.IndexOf('$cleanupFailure = $null', [System.StringComparison]::Ordinal)
+        ($remapIndex -lt $cleanupInitIndex) | Should Be $true
+        $launcherSource.Contains('recovery CLI returned exit 3') | Should Be $true
+        $launcherSource.Contains('reported as exit 1 (operational failure; outcome uncertain)') | Should Be $true
+        ([regex]::Matches($launcherSource, [regex]::Escape('$scriptExitCode = 3'))).Count | Should Be 1
+    }
 }

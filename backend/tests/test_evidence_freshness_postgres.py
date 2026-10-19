@@ -41,13 +41,30 @@ def _postgres_configuration_reason(database_url: str) -> str | None:
         return "EVIDENCEFORGE_TEST_DATABASE_URL must use PostgreSQL"
     if not parsed_url.host:
         return "EVIDENCEFORGE_TEST_DATABASE_URL must include a PostgreSQL host"
+    normalized_host = (parsed_url.host or "").lower().rstrip(".")
+    if normalized_host not in {"localhost", "127.0.0.1", "::1"}:
+        return "EVIDENCEFORGE_TEST_DATABASE_URL must target localhost or a loopback PostgreSQL host"
+    if parsed_url.query:
+        return (
+            "EVIDENCEFORGE_TEST_DATABASE_URL must not include URL query "
+            "parameters; connection-target overrides such as 'host' and "
+            "'hostaddr' are not permitted for loopback test targets"
+        )
+    database = parsed_url.database or ""
+    if database != "evidenceforge_test":
+        return "EVIDENCEFORGE_TEST_DATABASE_URL must use evidenceforge_test"
     return None
 
 
 POSTGRES_CONFIGURATION_REASON = _postgres_configuration_reason(POSTGRES_URL)
 
+if POSTGRES_URL and POSTGRES_CONFIGURATION_REASON is not None:
+    raise RuntimeError(
+        f"Unsafe EVIDENCEFORGE_TEST_DATABASE_URL configuration: {POSTGRES_CONFIGURATION_REASON}"
+    )
+
 pytestmark = pytest.mark.skipif(
-    POSTGRES_CONFIGURATION_REASON is not None,
+    not POSTGRES_URL,
     reason=POSTGRES_CONFIGURATION_REASON or "invalid PostgreSQL test configuration",
 )
 

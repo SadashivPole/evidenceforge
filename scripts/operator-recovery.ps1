@@ -673,6 +673,16 @@ finally {
     # and verify the database state read-only whenever the outcome is
     # uncertain.
     $recoveryExitCode = $scriptExitCode
+    # A raw exit code 3 from the recovery CLI is not the reserved launcher
+    # outcome (CLI success plus failed or unverified staging cleanup). If the
+    # CLI itself exited 3, surfacing code 3 would be indistinguishable from
+    # that reserved outcome, so this result is reported as exit 1
+    # (operational failure; outcome uncertain) with an explicit diagnostic.
+    if ($recoveryExitCode -eq 3) {
+        [Console]::Error.WriteLine('WARNING: recovery CLI returned exit 3; launcher code 3 is reserved for recovery-success-with-failed-cleanup, so this result is reported as exit 1 (operational failure; outcome uncertain).')
+        $recoveryExitCode = 1
+        $scriptExitCode = 1
+    }
     $cleanupFailure = $null
     if ($recoveryStageVolumeCleanupArmed -and $recoveryStageVolumeCandidate -and $targetProfile -and $targetProfile.docker_context) {
         $cleanupInspectOutput = & docker --context ([string]$targetProfile.docker_context) volume inspect $recoveryStageVolumeCandidate 2>$null

@@ -146,6 +146,7 @@ function New-VolumeJson {
     if ($null -ne $Owned) { $labels['io.evidenceforge.recovery-staging'] = 'true' }
     return (@{ Name = $Name; Driver = 'local'; Labels = $labels } | ConvertTo-Json -Compress)
 }
+$rawArgs = @($Rest)
 $a = @($Rest)
 while ($a.Count -ge 2 -and $a[0] -eq '--context') {
     if ($a.Count -eq 2) { $a = @() } else { $a = @($a[2..($a.Count - 1)]) }
@@ -153,7 +154,7 @@ while ($a.Count -ge 2 -and $a[0] -eq '--context') {
 if ($a.Count -eq 0) { exit 1 }
 $callLogPath = [Environment]::GetEnvironmentVariable('STUB_CALL_LOG', 'Process')
 if ($callLogPath) {
-    Add-Content -LiteralPath $callLogPath -Value ([string]::Join(' ', $a)) -Encoding ASCII
+    Add-Content -LiteralPath $callLogPath -Value ([string]::Join(' ', $rawArgs)) -Encoding ASCII
 }
 switch ($a[0]) {
     'context' {
@@ -394,6 +395,16 @@ exit 1
             $result = Invoke-LauncherScenario -Fixture $fixture -RunRc 0
             Assert-LauncherExitCode -Expected 0 -Result $result
             $result.StdErr.Contains('committed-but-cleanup-failed') | Should Be $false
+            $callLogPath = Join-Path $fixture.Dir 'shim-calls.log'
+            $callLog = @(Get-Content -LiteralPath $callLogPath)
+            $rmPrefix = '--context ' + $fixture.Context + ' volume rm '
+            $rmCalls = @($callLog | Where-Object {
+                $_.StartsWith($rmPrefix, [System.StringComparison]::Ordinal)
+            })
+            $rmCalls.Count | Should Be 1
+            $removedVolume = $rmCalls[0].Substring($rmPrefix.Length)
+            $inspectCall = '--context ' + $fixture.Context + ' volume inspect ' + $removedVolume
+            ($callLog -contains $inspectCall) | Should Be $true
         }
         finally {
             Remove-ExitContractFixture $fixture
@@ -455,6 +466,15 @@ exit 1
             $result.StdErr.Contains('staging volume identity changed') | Should Be $true
             $result.StdErr.Contains(('docker --context ' + $fixture.Context + ' volume inspect ')) | Should Be $true
             $result.StdErr.Contains('do NOT delete this volume until you have positively identified it') | Should Be $true
+            $callLogPath = Join-Path $fixture.Dir 'shim-calls.log'
+            $callLog = @(Get-Content -LiteralPath $callLogPath)
+            (@($callLog | Where-Object {
+                $_ -match '(^|\s)volume rm(\s|$)'
+            }).Count -eq 0) | Should Be $true
+            $inspectPrefix = '--context ' + $fixture.Context + ' volume inspect '
+            (@($callLog | Where-Object {
+                $_.StartsWith($inspectPrefix, [System.StringComparison]::Ordinal)
+            }).Count -gt 0) | Should Be $true
             $result.StdErr.Contains('Staging volume requiring review:') | Should Be $true
         }
         finally {
@@ -495,6 +515,39 @@ exit 1
             $result = Invoke-LauncherScenario -Fixture $fixture -RunRc 7 -RmRc 1
             Assert-LauncherExitCode -Expected 7 -Result $result
             $result.StdErr.Contains('recovery outcome preserved as exit 7') | Should Be $true
+        }
+        finally {
+            Remove-ExitContractFixture $fixture
+        }
+    }
+
+    It 'exit 1 reported: raw CLI exit 3 with verified cleanup never surfaces reserved code 3' {
+        if (-not $script:behavioralReady) { return }
+        $fixture = New-ExitContractFixture
+        try {
+            $result = Invoke-LauncherScenario -Fixture $fixture -RunRc 3
+            Assert-LauncherExitCode -Expected 1 -Result $result
+            $result.StdErr.Contains('recovery CLI returned exit 3') | Should Be $true
+            $result.StdErr.Contains('reported as exit 1 (operational failure; outcome uncertain)') | Should Be $true
+            $result.StdErr.Contains('committed-but-cleanup-failed') | Should Be $false
+            $result.StdErr.Contains('Staging volume requiring review:') | Should Be $false
+        }
+        finally {
+            Remove-ExitContractFixture $fixture
+        }
+    }
+
+    It 'exit 1 reported: raw CLI exit 3 plus cleanup failure keeps volume review and reports 1' {
+        if (-not $script:behavioralReady) { return }
+        $fixture = New-ExitContractFixture
+        try {
+            $result = Invoke-LauncherScenario -Fixture $fixture -RunRc 3 -RmRc 1
+            Assert-LauncherExitCode -Expected 1 -Result $result
+            $result.StdErr.Contains('recovery CLI returned exit 3') | Should Be $true
+            $result.StdErr.Contains('staging volume removal failed') | Should Be $true
+            $result.StdErr.Contains('recovery outcome preserved as exit 1') | Should Be $true
+            $result.StdErr.Contains('Staging volume requiring review:') | Should Be $true
+            $result.StdErr.Contains('committed-but-cleanup-failed') | Should Be $false
         }
         finally {
             Remove-ExitContractFixture $fixture

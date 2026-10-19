@@ -122,15 +122,23 @@ def test_postgres_bootstrap_rollback_concurrency_and_authentication(
         "evidenceforge_bootstrap_it_",
         "evidenceforge_auth_it_",
     )
+    normalized_host = (target_url.host or "").lower().rstrip(".")
+    if target_url.query:
+        pytest.fail(
+            "The bootstrap integration test URL must not include URL query "
+            "parameters; connection-target overrides such as 'host' and "
+            "'hostaddr' are not permitted for loopback bootstrap targets."
+        )
     if (
         target_url.get_backend_name() != "postgresql"
-        or not target_url.host
+        or normalized_host not in {"localhost", "127.0.0.1", "::1"}
         or not target_url.database
         or not target_url.database.startswith(allowed_names)
     ):
         pytest.fail(
-            "The bootstrap integration test requires PostgreSQL and an explicitly "
-            "named evidenceforge_bootstrap_it_* or evidenceforge_auth_it_* database."
+            "The bootstrap integration test requires PostgreSQL on localhost/loopback "
+            "and an explicitly named "
+            "evidenceforge_bootstrap_it_* or evidenceforge_auth_it_* database."
         )
 
     engine = __import__("sqlalchemy").create_engine(
