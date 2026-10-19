@@ -143,7 +143,7 @@ The source tree above summarizes tracked, relevant areas; local experimental fil
 | sentence-transformers | Explicit local embedding model path. | Package dependency; actual model loading/download is optional to basic app startup and required only when invoking the embedding path. |
 | Next.js 16 / React 19 | Browser workbench. | Required only for frontend development outside Docker; Compose builds it. |
 | pytest, Ruff, mypy, httpx | Backend testing and quality tooling. | Install with `backend[dev]`. |
-| npm, ESLint, Prettier, TypeScript | Frontend dependency and quality workflow. | Frontend checks; use Node 20 as CI does. |
+| npm, ESLint, Prettier, TypeScript | Frontend dependency and quality workflow. | Frontend checks; use Node.js 24 LTS as CI does. |
 
 Versions above reflect project metadata, image tags, and CI configuration inspected at `027e104`; they are not a compatibility guarantee for every host.
 
@@ -151,7 +151,7 @@ Versions above reflect project metadata, image tags, and CI configuration inspec
 
 - Windows with PowerShell and Docker Desktop/Compose for the documented Compose path.
 - Python 3.11 or later for local backend tools (CI uses Python 3.12).
-- Node.js 20 and npm for frontend checks outside Docker.
+- Node.js 24 LTS and npm for frontend checks outside Docker.
 - Network access for initial container/package/model downloads as needed.
 - Ports **8000** (API) and **3000** (web) available. PostgreSQL is not published to a host port by `compose.yaml`.
 - PostgreSQL/pgvector is supplied by Compose; no separate host database is required for the basic stack.
@@ -163,7 +163,7 @@ The API container runs `alembic upgrade head` before starting Uvicorn. Starting 
 From PowerShell:
 
 ```powershell
-Set-Location E:\Projects\evidenceforge
+# Run these commands from the root of your cloned repository.
 python --version
 docker --version
 docker compose version
@@ -397,7 +397,7 @@ npm run format:check
 npm run build
 ```
 
-The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector service. Inspecting CI configuration alone is not evidence that a run passed; the published redesign commit's CI result is recorded above.
+The repository CI file uses Python 3.12, Node.js 24 LTS, and a PostgreSQL 16 pgvector service. Inspecting CI configuration alone is not evidence that a run passed; the published redesign commit's CI result is recorded above.
 
 ## Troubleshooting
 
@@ -413,7 +413,7 @@ The repository CI file uses Python 3.12, Node 20, and a PostgreSQL 16 pgvector s
 | Response update returns 422 | Status-specific rule, malformed payload, duplicate/foreign/nonexistent citation. | Check request schema and obtain the chunk ID through the same workspace's evidence routes. |
 | XLSX import returns 415/422 | Wrong extension or workbook fails deterministic validation. | Use a synthetic `.xlsx` file and inspect API response; do not rename unrelated formats to `.xlsx`. |
 | Frontend is visible but API actions fail in Compose | The Next.js rewrite uses `EVIDENCEFORGE_API_URL`, which Compose now defaults to `http://api:8000`. Runtime connectivity still needs verification. | Run `docker compose ps` and `docker compose logs --tail 100 api web`. Test `Invoke-RestMethod http://localhost:8000/health/live` and `Invoke-RestMethod http://localhost:3000/backend-api/health/live`. Inspect browser DevTools Network and only the non-secret API URL value if needed. |
-| Frontend npm check fails | Wrong Node/npm version, dependencies not installed, or lint/type issues. | Use Node 20 as CI does, run `npm ci` in `frontend`, then rerun one script at a time. |
+| Frontend npm check fails | Wrong Node/npm version, dependencies not installed, or lint/type issues. | Use Node.js 24 LTS as CI does, run `npm ci` in `frontend`, then rerun one script at a time. |
 | PostgreSQL tests fail to connect or vector type is missing | Test DB is unavailable or lacks `vector` extension. | Follow `.github/workflows/ci.yml` service setup; use a separate pgvector test DB and only the test's documented env variable. |
 
 ## Current status and limitations
@@ -450,6 +450,8 @@ Semantic retrieval and RRF are present in current source; they must not be descr
 3. Run the relevant backend/frontend checks above and review their actual output.
 4. Review `git diff --check` and the full `git diff`; verify only intended files changed.
 5. Decide yourself whether and when to commit. This guide never stages, commits, or publishes changes automatically.
+
+Project policies: [Apache 2.0 license](LICENSE) | [Security policy](SECURITY.md) | [Contributing guide](CONTRIBUTING.md).
 
 ## FAQ
 

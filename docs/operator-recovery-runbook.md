@@ -85,9 +85,33 @@ finally {
 
 The printed value is the `rendered_compose_sha256` field. Store it only in the access-restricted profile, independently of the configuration being pinned. The hash calculation does not make an unreviewed Compose file trustworthy.
 
+## Exit-code contract
+
+The launcher ends with an explicit `exit`, so its result is the child `powershell.exe` process exit code. Do not call or dot-source the launcher inside your interactive console: its explicit `exit` closes that PowerShell process. For automation, use the encoded child-process invocation shown after the approved invocation template; this preserves `-RecoveryArguments` as an actual array and lets the parent read the child exit code.
+
+| Exit code | Meaning | Required operator action |
+|---|---|---|
+| 0 | The recovery CLI reported completion and staging cleanup was verified. | Store the printed bearer token immediately in the approved secret manager. |
+| 1 | Operational failure reported by the recovery CLI. The outcome is uncertain; this code intentionally makes no claim about whether a write transaction began, committed, or rolled back. If the recovery CLI itself exited with code 3, the launcher reports this as exit 1 (and prints why), because exit code 3 is reserved exclusively for committed-but-cleanup-failed. | Do NOT rerun. Verify the target database state through the approved read-only procedure first, then decide. |
+| 2 | One of two things: (a) a documented refusal — the launcher or a documented CLI refusal check refused before any write; launcher refusals print `EvidenceForge operator recovery preflight refused:` followed by the cause; or (b) the launcher's generic catch trapped an unexpected launcher or Docker error and printed its exception message before exiting 2. Exit 2 alone does not establish whether a write occurred. | Do NOT retry automatically solely because the code is 2. First examine the diagnostic output: a documented refusal states an explicit cause that you can fix, review, and then rerun. If the output is an unexpected error, or anything about the outcome is uncertain, verify the target database through the approved read-only procedure before deciding on any rerun. |
+| 3 | The recovery CLI reported success, but staging cleanup failed or could not be verified. The token should already be secured. The launcher emits code 3 only in this case: a raw recovery-CLI exit code 3 is always reported as exit 1 (see the exit 1 row), so launcher exit 3 unambiguously means committed-but-cleanup-failed. | Do NOT rerun recovery. The launcher prints the line `Staging volume requiring review: <name>`, preceded by a specific warning that contains the fully context-qualified inspection command (it always uses the target profile's configured Docker context). Run that printed inspection command — general form `docker --context <target-context> volume inspect <name>` — and confirm driver `local` plus label `io.evidenceforge.recovery-staging=true` for exactly that name. Only after identification succeeds, remove that same volume name in the same context: `docker --context <target-context> volume rm <name>`; inspection and removal must address the identical volume. If the printed warning was `staging volume identity changed` (the launcher tells you not to delete), or inspection cannot positively identify the volume, leave it in place and escalate through the incident channel. Confirm database state afterwards through the approved read-only procedure. |
+
+- Exit 2 always dominates: if a pre-write refusal occurred and a later cleanup step also failed, the preserved result is still exit 2 with an added cleanup warning, never a rewritten code.
+- Any other nonzero recovery result passes through unchanged so operational failures are never rewritten as refusals — with one documented, diagnostic-backed exception: a raw recovery-CLI exit code 3 is reported as exit 1, so launcher code 3 is reserved exclusively for committed-but-cleanup-failed.
+- Whenever a cleanup problem is detected next to a nonzero recovery result, the launcher prints `recovery outcome preserved as exit <n>` plus `Staging volume requiring review: <name>`; the `<n>` code from the CLI governs retry behavior per the table above, and the volume review procedure from the exit 3 row applies to that name.
+
 ## Isolated validation before deployment
 
 Run tests against disposable PostgreSQL containers only. The operator-recovery integration suite uses `EVIDENCEFORGE_OPERATOR_RECOVERY_TEST_DATABASE_URL`, which must point to an approved local/loopback test database. The unit tests validate missing/stale or version-incompatible attestations, invalid TLS modes, hostname mismatch, server-address mismatch, server-port mismatch, prohibited PostgreSQL environment overrides, and deployment-ID mismatch. Never point test variables at an application database.
+
+For the PowerShell launcher contract, also run the Pester suites below on Windows PowerShell 5.1 from the repository root (Pester 3.4 or later):
+
+```powershell
+Invoke-Pester .\scripts\tests\operator-recovery-static.Tests.ps1
+Invoke-Pester .\scripts\tests\operator-recovery-exit-contract.Tests.ps1
+```
+
+The first suite is static string-contract and safe to run anywhere. The second is behavioral: it stages disposable fixtures under %TEMP%, places a `docker` PATH shim in front, and drives the real launcher end to end to assert the entire outcome x cleanup exit-code matrix without contacting a Docker daemon; it no-ops on non-Windows hosts. Expect roughly a minute of runtime on a developer box.
 
 Check the new Python files with Ruff and run the recovery unit/PostgreSQL tests, then rerun both bootstrap suites. Do not launch the PowerShell recovery wrapper merely to test command installation. The wrapper is intentionally expected to refuse against the current Compose file until the TLS and deployment-identity configuration exists.
 
@@ -113,5 +137,27 @@ $recoveryArgs = @(
 ```
 
 The launcher forwards only the documented space-separated options shown above and refuses unknown, equals-form, or abbreviated options; `--target-attestation-file` is generated and supplied by the launcher itself, the recovery CLI accepts only its launcher-staged `/run/evidenceforge/recovery-target.json` value, and it must never appear in `$recoveryArgs`.
+
+When automation must read the launcher result, use this child-process pattern. Do not flatten `$recoveryArgs` into `powershell.exe -File` arguments: values such as `--confirm-recovery` can be interpreted as parameter names instead of array elements. Use this only after the approved deployment and formal approval described above.
+
+```powershell
+$launcherPath = (Resolve-Path '.\scripts\operator-recovery.ps1').Path
+$profilePath = (Resolve-Path $targetProfilePath).Path
+$quotePowerShellLiteral = {
+    param([string] $Value)
+    "'" + $Value.Replace("'", "''") + "'"
+}
+$launcherLiteral = & $quotePowerShellLiteral $launcherPath
+$profileLiteral = & $quotePowerShellLiteral $profilePath
+$argumentLiterals = ($recoveryArgs | ForEach-Object {
+    & $quotePowerShellLiteral $_
+}) -join ', '
+$childCommand = "& $launcherLiteral -TargetProfilePath $profileLiteral -RecoveryArguments @($argumentLiterals)"
+$encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+& powershell.exe -NoProfile -EncodedCommand $encodedCommand
+$recoveryExitCode = $LASTEXITCODE
+```
+
+`$LASTEXITCODE` in the calling PowerShell process is the child process exit code. Capture it before running another native executable.
 
 Do not run this template now. Use it only after a reviewed deployment change, verified certificate provisioning, successful disposable integration tests, and formal approval for the intended recovery.

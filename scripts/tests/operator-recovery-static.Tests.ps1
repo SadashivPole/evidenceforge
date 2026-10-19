@@ -174,4 +174,62 @@ Describe 'EvidenceForge operator-recovery launcher static contract' {
         $attestationHeader.Contains('version = 2') | Should Be $true
         $launcherSource.Contains('server_port = $databasePort') | Should Be $true
     }
+    It 'preserves the recovery outcome before cleanup and maps cleanup failure by that outcome' {
+        $dockerRunCapture = $launcherSource.IndexOf('$scriptExitCode = $LASTEXITCODE', [System.StringComparison]::Ordinal)
+        ($dockerRunCapture -ge 0) | Should Be $true
+        $preserveIndex = $launcherSource.IndexOf('$recoveryExitCode = $scriptExitCode', [System.StringComparison]::Ordinal)
+        ($preserveIndex -gt $dockerRunCapture) | Should Be $true
+        $cleanupInitIndex = $launcherSource.IndexOf('$cleanupFailure = $null', [System.StringComparison]::Ordinal)
+        ($cleanupInitIndex -gt $preserveIndex) | Should Be $true
+        $launcherSource.Contains('if ($null -ne $cleanupFailure) {') | Should Be $true
+        $launcherSource.Contains('if ($recoveryExitCode -eq 0) {') | Should Be $true
+        $launcherSource.Contains('(exit 3 = committed-but-cleanup-failed)') | Should Be $true
+        $launcherSource.Contains('${cleanupFailure}; recovery outcome preserved as exit ${recoveryExitCode}.') | Should Be $true
+        ([regex]::Matches($launcherSource, [regex]::Escape('$scriptExitCode = 2'))).Count | Should Be 2
+        ([regex]::Matches($launcherSource, [regex]::Escape('$scriptExitCode = 3'))).Count | Should Be 1
+    }
+    It 'records each cleanup failure branch without overwriting the recovery outcome code' {
+        $cleanupFailure = '$' + 'cleanupFailure'
+        foreach ($marker in @('staging volume removal failed', 'staging volume identity changed', 'staging volume cleanup could not be verified', 'staging volume cleanup status could not be verified')) {
+            $launcherSource.Contains(($cleanupFailure + " = '" + $marker + "'")) | Should Be $true
+        }
+        $regionStart = $launcherSource.IndexOf('$recoveryExitCode = $scriptExitCode', [System.StringComparison]::Ordinal)
+        $regionEnd = $launcherSource.IndexOf('if ($stageScriptPath -and', [System.StringComparison]::Ordinal)
+        ($regionEnd -gt $regionStart) | Should Be $true
+        $cleanupRegion = $launcherSource.Substring($regionStart, $regionEnd - $regionStart)
+        $cleanupRegion.Contains('$scriptExitCode = 2') | Should Be $false
+        ([regex]::Matches($cleanupRegion, [regex]::Escape('$cleanupFailure = '))).Count | Should Be 5
+        # Every cleanup-failure warning names the exact staged volume, and the
+        # identity-mismatch warning explicitly forbids deletion until verified.
+        $launcherSource.Contains('"Staging volume requiring review: $recoveryStageVolumeCandidate"') | Should Be $true
+        $launcherSource.Contains('"WARNING: staging volume identity changed for ''$recoveryStageVolumeCandidate''') | Should Be $true
+        $launcherSource.Contains('do NOT delete this volume until you have positively identified it') | Should Be $true
+        # Remediation commands inside warnings always carry the configured
+        # Docker context and address the exact same volume name.
+        (([regex]::Matches($launcherSource, [regex]::Escape('docker --context $($targetProfile.docker_context) volume inspect '))).Count -ge 4) | Should Be $true
+        $launcherSource.Contains('docker --context $($targetProfile.docker_context) volume rm ') | Should Be $true
+    }
+    It 'keeps the explicit final exit as the only process-exit statement' {
+        $trimmed = $launcherSource.TrimEnd()
+        $trimmed.EndsWith('exit $scriptExitCode') | Should Be $true
+        # Single-quoted pattern carries the literal dollar via regex escape; it
+        # matches any line-starting 'exit' except the canonical final one.
+        $exitPattern = '(?m)^\s*exit\b(?!\s+\$scriptExitCode\b)'
+        ([regex]::Matches($launcherSource, $exitPattern)).Count | Should Be 0
+        # Negative control: a deliberately invalid fixture appended with a
+        # second exit statement must be detected by the same pattern.
+        $invalidFixture = $launcherSource + "`r`nexit 2"
+        (([regex]::Matches($invalidFixture, $exitPattern)).Count -ge 1) | Should Be $true
+    }
+    It 'reserves exit 3 for committed-but-cleanup-failed; raw CLI exit 3 is remapped to exit 1' {
+        $preserveIndex = $launcherSource.IndexOf('$recoveryExitCode = $scriptExitCode', [System.StringComparison]::Ordinal)
+        ($preserveIndex -ge 0) | Should Be $true
+        $remapIndex = $launcherSource.IndexOf('if ($recoveryExitCode -eq 3) {', [System.StringComparison]::Ordinal)
+        ($remapIndex -gt $preserveIndex) | Should Be $true
+        $cleanupInitIndex = $launcherSource.IndexOf('$cleanupFailure = $null', [System.StringComparison]::Ordinal)
+        ($remapIndex -lt $cleanupInitIndex) | Should Be $true
+        $launcherSource.Contains('recovery CLI returned exit 3') | Should Be $true
+        $launcherSource.Contains('reported as exit 1 (operational failure; outcome uncertain)') | Should Be $true
+        ([regex]::Matches($launcherSource, [regex]::Escape('$scriptExitCode = 3'))).Count | Should Be 1
+    }
 }
