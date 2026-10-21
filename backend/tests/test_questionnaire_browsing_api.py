@@ -7,8 +7,13 @@ from io import BytesIO
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 
+from app.questionnaires.persistence.models import (
+    Questionnaire,
+    QuestionnaireVersion,
+)
 from tests.conftest import auth_headers, create_principal, create_workspace_with_owner
 
 
@@ -140,3 +145,81 @@ def test_browsing_unknown_questionnaire_version_returns_404(
         headers=auth_headers(principal),
     )
     assert response.status_code == 404
+
+
+def test_questionnaire_list_fetches_latest_versions_in_one_batch(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    """Keep version-query count constant as the workspace grows."""
+
+    principal = create_principal(
+        db_session,
+        email="guided-query-count@example.invalid",
+        display_name="Guided Query Counter",
+    )
+    workspace = create_workspace_with_owner(
+        db_session,
+        principal,
+        name="Guided Query Count Workspace",
+    )
+
+    for index in range(4):
+        questionnaire = Questionnaire(
+            workspace_id=workspace.id,
+            name=f"Query Count Questionnaire {index}",
+            created_by_user_id=principal.user.id,
+        )
+        db_session.add(questionnaire)
+        db_session.flush()
+
+        for version_number in (1, 2):
+            hash_char = "a" if version_number == 1 else "b"
+            db_session.add(
+                QuestionnaireVersion(
+                    workspace_id=workspace.id,
+                    questionnaire_id=questionnaire.id,
+                    version_number=version_number,
+                    raw_sha256=hash_char * 64,
+                    canonical_sha256=hash_char * 64,
+                    source_filename=f"query-count-{index}-v{version_number}.xlsx",
+                    parser_version="test-v1",
+                    normalization_version="test-v1",
+                    question_identity_version="test-v1",
+                    canonical_hash_version="test-v1",
+                    question_count=version_number,
+                    created_by_user_id=principal.user.id,
+                )
+            )
+    db_session.commit()
+
+    version_selects: list[str] = []
+
+    def count_version_selects(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        if (
+            statement.lstrip().upper().startswith("SELECT")
+            and "questionnaire_versions" in statement
+        ):
+            version_selects.append(statement)
+
+    event.listen(client.app.state.engine, "before_cursor_execute", count_version_selects)
+    try:
+        response = client.get(
+            f"/workspaces/{workspace.id}/questionnaires",
+            headers=auth_headers(principal),
+        )
+    finally:
+        event.remove(client.app.state.engine, "before_cursor_execute", count_version_selects)
+
+    assert response.status_code == 200, response.text
+    assert len(response.json()) == 4
+    assert len(version_selects) == 1
+    assert all(item["latest_version_number"] == 2 for item in response.json())
+    assert all(item["question_count"] == 2 for item in response.json())
