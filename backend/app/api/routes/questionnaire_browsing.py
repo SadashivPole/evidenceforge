@@ -6,7 +6,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
@@ -49,16 +49,44 @@ def list_questionnaires(
     )
 
     items: list[QuestionnaireBrowserItem] = []
-    for questionnaire in questionnaires:
-        latest = db.scalar(
-            select(QuestionnaireVersion)
+    latest_by_questionnaire_id: dict[uuid.UUID, QuestionnaireVersion] = {}
+
+    if questionnaires:
+        # Find the latest version number for each questionnaire in this workspace.
+        # This avoids executing one additional query for every questionnaire.
+        latest_version_numbers = (
+            select(
+                QuestionnaireVersion.questionnaire_id.label("questionnaire_id"),
+                func.max(QuestionnaireVersion.version_number).label("latest_version_number"),
+            )
             .where(
                 QuestionnaireVersion.workspace_id == context.workspace.id,
-                QuestionnaireVersion.questionnaire_id == questionnaire.id,
             )
-            .order_by(QuestionnaireVersion.version_number.desc())
-            .limit(1)
+            .group_by(QuestionnaireVersion.questionnaire_id)
+            .subquery()
         )
+
+        # Fetch all latest versions in a single query.
+        latest_versions = db.scalars(
+            select(QuestionnaireVersion)
+            .join(
+                latest_version_numbers,
+                (QuestionnaireVersion.questionnaire_id == latest_version_numbers.c.questionnaire_id)
+                & (
+                    QuestionnaireVersion.version_number
+                    == latest_version_numbers.c.latest_version_number
+                ),
+            )
+            .where(QuestionnaireVersion.workspace_id == context.workspace.id)
+        )
+
+        latest_by_questionnaire_id = {
+            version.questionnaire_id: version for version in latest_versions
+        }
+
+    for questionnaire in questionnaires:
+        latest = latest_by_questionnaire_id.get(questionnaire.id)
+
         items.append(
             QuestionnaireBrowserItem(
                 id=questionnaire.id,
@@ -103,7 +131,10 @@ def list_questionnaire_versions(
         )
     )
     if questionnaire is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Questionnaire not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Questionnaire not found",
+        )
 
     versions = list(
         db.scalars(
@@ -115,6 +146,7 @@ def list_questionnaire_versions(
             .order_by(QuestionnaireVersion.version_number.desc())
         )
     )
+
     record_audit_event(
         db,
         actor_user_id=context.user.id,
@@ -125,6 +157,7 @@ def list_questionnaire_versions(
         metadata={"count": len(versions)},
     )
     db.commit()
+
     return [
         QuestionnaireVersionBrowserItem(
             id=version.id,
@@ -175,7 +208,10 @@ def list_questionnaire_version_questions(
             QuestionnaireVersionQuestion.questionnaire_id == questionnaire_id,
             QuestionnaireVersionQuestion.questionnaire_version_id == questionnaire_version_id,
         )
-        .order_by(QuestionnaireVersionQuestion.ordinal, QuestionnaireVersionQuestion.id)
+        .order_by(
+            QuestionnaireVersionQuestion.ordinal,
+            QuestionnaireVersionQuestion.id,
+        )
     ).all()
 
     items = [
