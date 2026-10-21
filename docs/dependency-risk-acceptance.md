@@ -77,9 +77,19 @@ At reassessment, record the new audit output, the available remediation
 options, and whether the temporary acceptance is closed, renewed, or the
 release is held.
 
+## Reassessment update (2026-10-21)
+
+A fresh frontend audit on 2026-10-21 reported:
+
+- `npm audit`: five high-severity findings flowing through the `braces@3.0.3` advisory and the `micromatch` / `fast-glob` / Next.js ESLint tooling dependency chain.
+- `npm audit --omit=dev`: zero reported vulnerabilities.
+
+The production-only result does not prove the affected package is absent from the current frontend container. `frontend/Dockerfile` runs `npm ci` and starts `npm run dev`; a production-optimized frontend image and its dependency inventory have not been validated. Do not run `npm audit fix --force` as a blind remediation because npm proposed a breaking downgrade of `eslint-config-next`.
+
+The push-triggered CI run for current `main` (`3e7529b4307d867dc720a597ab6a7564e340726f`) completed successfully with all four jobs passing: Backend, Frontend, PostgreSQL bootstrap/authentication, and PostgreSQL concurrency. Passing CI does not resolve the advisory or independently establish production deployment safety.
+
+The temporary acceptance remains in effect until reassessment, due no later than 2026-11-02. This is not a claim that the affected package is safe, and the full dependency audit must not be described as clean.
+
 ## Release limitation
 
-This record does not replace CI validation. The local frontend checks passed
-on Node.js 24.19.0 after the CI and documentation update, but a hosted
-GitHub Actions run for the updated workflow has not yet been verified.
-No release, commit, or push is authorized by this document.
+This file records a time-bounded risk decision; it does not resolve the advisory or independently authorize a production release. Any alpha release must disclose this finding. Reassess earlier if a patch or material advisory change appears, the dependency chain changes, or the production/container dependency inventory is updated.
