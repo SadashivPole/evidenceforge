@@ -332,6 +332,7 @@ class QuestionnaireVersionQuestion(Base):
     source_row: Mapped[int] = mapped_column(Integer, nullable=False)
     sheet_name: Mapped[str] = mapped_column(String(255), nullable=False)
     section_path: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    source_question_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     normalized_question_text: Mapped[str] = mapped_column(Text, nullable=False)
     source_question_id: Mapped[str | None] = mapped_column(
         String(255),
