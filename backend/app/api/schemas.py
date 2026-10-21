@@ -213,6 +213,43 @@ class QuestionnaireIgnoredSheetResponse(BaseModel):
     reason: str
 
 
+class QuestionnaireBrowserItem(BaseModel):
+    """Readable workspace-scoped questionnaire summary for the review UI."""
+
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+    latest_version_id: uuid.UUID | None = None
+    latest_version_number: int | None = None
+    source_filename: str | None = None
+    imported_at: datetime | None = None
+    question_count: int = 0
+
+
+class QuestionnaireVersionBrowserItem(BaseModel):
+    """Readable metadata for one immutable questionnaire version."""
+
+    id: uuid.UUID
+    questionnaire_id: uuid.UUID
+    version_number: int
+    source_filename: str
+    question_count: int
+    created_at: datetime
+
+
+class QuestionnaireVersionQuestionBrowserItem(BaseModel):
+    """One version-specific question with its actual API UUID."""
+
+    id: uuid.UUID
+    ordinal: int
+    source_row: int
+    sheet_name: str
+    section_path: list[str]
+    question_text: str
+    source_question_id: str | None = None
+    stable_question_id: str
+
+
 class QuestionnaireImportResponse(BaseModel):
     """Deterministic XLSX questionnaire import persistence result."""
 

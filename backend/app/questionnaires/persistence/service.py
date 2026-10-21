@@ -355,6 +355,7 @@ def persist_import(
                     source_row=question.source_row,
                     sheet_name=question.sheet_name,
                     section_path=list(question.section_path),
+                    source_question_text=question.question_text,
                     normalized_question_text=question.normalized_question_text,
                     source_question_id=(
                         normalize_source_question_id(question.source_question_id)

@@ -4,6 +4,9 @@ const backendOrigin = (
 ).replace(/\/$/, "");
 
 const nextConfig = {
+  async redirects() {
+    return [{ source: "/", destination: "/guided", permanent: false }];
+  },
   async rewrites() {
     return [
       {
