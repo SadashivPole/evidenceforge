@@ -14,6 +14,8 @@ EvidenceForge organizes security-questionnaire questions alongside workspace-sco
 
 > **Documentation provenance and publication status:** The original audit behind this guide inspected public `main` at commit `027e104`. Local demo outcomes listed below were supplied for that documentation task; they are not production validation. The redesign was subsequently applied locally, committed as [`5eacc0fc5cda4ea8436eafabd47b68f154708c9a`](https://github.com/SadashivPole/evidenceforge/commit/5eacc0fc5cda4ea8436eafabd47b68f154708c9a), and pushed to public `main`. Its [GitHub Actions CI run](https://github.com/SadashivPole/evidenceforge/actions/runs/38136621746) passed the **Backend**, **Backend PostgreSQL concurrency**, and **Frontend** jobs. Those later actions do not expand the original audit scope or turn supplied demo outcomes into production validation.
 
+> **Current release status (2026-10-21):** The repository is public under Apache License 2.0. Current `main` is [`3e7529b4307d867dc720a597ab6a7564e340726f`](https://github.com/SadashivPole/evidenceforge/commit/3e7529b4307d867dc720a597ab6a7564e340726f); its push-triggered [GitHub Actions run](https://github.com/SadashivPole/evidenceforge/actions/runs/39597319189) completed successfully with all four jobs passing. No formal GitHub Release has been published yet. The proposed first version is `v0.1.0-alpha.1` (developer preview), not a stable or production release. The recovered demo database migration and live guided-page browser E2E remain unverified. The frontend full dependency audit still reports the documented `braces@3.0.3` advisory; see `docs/dependency-risk-acceptance.md`.
+
 ## Contents
 
 - [What it is](#what-it-is)
@@ -73,7 +75,7 @@ Statuses describe what is present in the inspected source and what has evidence 
 | Response persistence, approval, idempotency, revisions | Implemented | Stores one logical response per question with immutable revisions and citation records. | Supplied local demo covers MEMBER rejection, citation validation, idempotency, revision 2, and history. |
 | Explicit human review action | Implemented, not a complete review product | API and workbench support explicit accept/approve/edit-and-approve/reject operations against grounded context. | Source includes route/service/UI integration; not an autonomous reviewer or a broad production review console. |
 | Liveness and readiness | Implemented | Liveness reports process state; readiness checks database connectivity. | Supplied local demo reports HTTP 200 for both, database `ok` for readiness. |
-| Frontend | Partial workbench | Next.js screen accepts resource IDs/token, runs grounding, loads/saves responses, and presents review operations. | Not a complete administration/import/export experience. Compose proxy variable mismatch is noted under [Troubleshooting](#troubleshooting). |
+| Frontend | Partial workbench | Next.js screen accepts resource IDs/token, runs grounding, loads/saves responses, and presents review operations. | Not a complete administration/import/export experience. Compose sends `/backend-api/*` requests to `EVIDENCEFORGE_API_URL` (default `http://api:8000`); live container/browser connectivity remains unverified. |
 | LLM answer generation | Not implemented end to end | Provider-neutral contracts and validation/evaluation scaffolding exist, but no configured production answer-generation request workflow is exposed. | Mock evaluation components are not a shipped generation service. |
 | Export / automatic submission / chatbot | Planned or absent | Not present as completed product capabilities. | Do not infer from design documents. |
 
@@ -397,7 +399,7 @@ npm run format:check
 npm run build
 ```
 
-The repository CI file uses Python 3.12, Node.js 24 LTS, and a PostgreSQL 16 pgvector service. Inspecting CI configuration alone is not evidence that a run passed; the published redesign commit's CI result is recorded above.
+The repository CI file uses Python 3.12, Node.js 24 LTS, and a PostgreSQL 16 pgvector service. The current `main` merge commit has a verified push-triggered CI run with all four jobs passing. That hosted result does not replace local recovered-database migration or guided-page browser end-to-end validation.
 
 ## Troubleshooting
 
