@@ -339,7 +339,7 @@ class QuestionnaireGroundingResponse(BaseModel):
 class QuestionnaireResponseUpsert(BaseModel):
     """Payload for creating or revising one questionnaire response."""
 
-    answer: str | None = None
+    answer: Annotated[str | None, Field(default=None, max_length=MAX_ANSWER_CHARACTERS)] = None
     status: ResponseStatus
     citation_chunk_ids: list[uuid.UUID] = Field(
         default_factory=list,
