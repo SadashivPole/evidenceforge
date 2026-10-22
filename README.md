@@ -1,20 +1,48 @@
-# EvidenceForge
+<p align="center">
+  <img src="docs/assets/evidenceforge-logo.svg" alt="EvidenceForge logo" width="120">
+</p>
 
-**Evidence first. Answers second.**
+<h1 align="center">EvidenceForge</h1>
 
-A local-first workbench for security-questionnaire evidence, provenance, retrieval, and review.
+<p align="center">
+  <strong>Evidence first. Answers second.</strong><br>
+  A local-first workbench for security-questionnaire evidence, source provenance, hybrid retrieval, and human review.
+</p>
 
-**Workspace isolation** · **XLSX import** · **Evidence provenance** · **Hybrid grounding** · **Response history**
+<p align="center">
+  <strong>Workspace isolation</strong> · <strong>XLSX import</strong> · <strong>Evidence provenance</strong> · <strong>Hybrid grounding</strong> · <strong>Response history</strong>
+</p>
 
-[Quick start](#quick-start) · [Problem and foundation](#the-problem-and-the-foundation) · [Architecture](#architecture) · [API reference](#api-reference) · [Limitations](#current-status-and-limitations)
+<p align="center">
+  <a href="https://github.com/SadashivPole/evidenceforge/actions/workflows/ci.yml"><img src="https://github.com/SadashivPole/evidenceforge/actions/workflows/ci.yml/badge.svg?branch=main" alt="GitHub Actions CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/SadashivPole/evidenceforge?style=flat-square" alt="Project license"></a>
+  <img src="https://img.shields.io/badge/API-FastAPI-009688?style=flat-square" alt="FastAPI">
+  <img src="https://img.shields.io/badge/UI-Next.js-111827?style=flat-square" alt="Next.js">
+  <img src="https://img.shields.io/badge/Data-PostgreSQL_%2B_pgvector-4169E1?style=flat-square" alt="PostgreSQL and pgvector">
+  <img src="https://img.shields.io/badge/Stage-Alpha_preview-D97706?style=flat-square" alt="Alpha preview">
+</p>
 
-EvidenceForge organizes security-questionnaire questions alongside workspace-scoped evidence and citations. It imports questionnaire workbooks, stores versioned evidence, grounds a question against evidence candidates, and persists cited response revisions with authorization and validation checks. It is a development workbench—not a compliance certification, autonomous answer system, or automatic submission tool.
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#workflow">Workflow</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#api-reference">API Reference</a> ·
+  <a href="#testing-and-quality-checks">Testing</a> ·
+  <a href="#current-status-and-limitations">Limitations</a>
+</p>
 
-![Diagram of EvidenceForge's implemented API, web workbench, PostgreSQL/pgvector persistence and grounding boundary](docs/assets/evidenceforge-architecture.svg)
+> **Alpha developer preview:** EvidenceForge retrieves evidence candidates and keeps citations and response revisions traceable. Response content and approval remain human-directed; end-to-end LLM answer generation and automatic submission are not implemented.
+
+![EvidenceForge architecture: browser workbench, FastAPI, PostgreSQL with pgvector, workspace-scoped evidence and hybrid grounding](docs/assets/evidenceforge-architecture.svg)
+
+<details>
+<summary><strong>Documentation provenance and release status</strong></summary>
 
 > **Documentation provenance and publication status:** The original audit behind this guide inspected public `main` at commit `027e104`. Local demo outcomes listed below were supplied for that documentation task; they are not production validation. The redesign was subsequently applied locally, committed as [`5eacc0fc5cda4ea8436eafabd47b68f154708c9a`](https://github.com/SadashivPole/evidenceforge/commit/5eacc0fc5cda4ea8436eafabd47b68f154708c9a), and pushed to public `main`. Its [GitHub Actions CI run](https://github.com/SadashivPole/evidenceforge/actions/runs/38136621746) passed the **Backend**, **Backend PostgreSQL concurrency**, and **Frontend** jobs. Those later actions do not expand the original audit scope or turn supplied demo outcomes into production validation.
 
 > **Current release status (2026-10-22):** The repository is public under Apache License 2.0. The pre-release documentation baseline is [`f96760d01a9c3eddb65bd2119e69ed0ff5c5d5fc`](https://github.com/SadashivPole/evidenceforge/commit/f96760d01a9c3eddb65bd2119e69ed0ff5c5d5fc); its push-triggered [GitHub Actions run](https://github.com/SadashivPole/evidenceforge/actions/runs/39606573588) completed successfully with all four jobs passing. The proposed first version is `v0.1.0-alpha.1`, an alpha developer preview rather than a stable or production release. The recovered demo database migration and live guided-page browser E2E remain unverified. The frontend full dependency audit still reports the documented `braces@3.0.3` advisory; see `docs/dependency-risk-acceptance.md`.
+
+</details>
 
 ## Contents
 
@@ -211,6 +239,144 @@ To inspect startup logs without tearing down services:
 ```powershell
 docker compose logs --tail 100 api web db
 ```
+
+### Isolated browser E2E setup (Windows PowerShell)
+
+Use this setup to validate the web workbench against a real API and a dedicated disposable PostgreSQL/pgvector database. Run the commands from the repository root. This creates a separate Compose project and database volume; it does not reuse the default project's `postgres_data` volume. The host ports `3000` and `8000` must be free. The commands below do not reset or delete any existing database.
+
+**Safety rules:** use synthetic questionnaire/evidence data only; keep the generated environment file private; never commit or share the one-time bearer token. Do not run the bootstrap against the default development, recovery, staging, or production database. The bootstrap is one-time; read the [operator runbook](docs/bootstrap-operator-runbook.md) first.
+
+**Port requirement:** This isolated project binds host ports `3000` and `8000`, so it cannot run alongside the default Compose stack. If that stack is running, stop its containers from the repository root with `docker compose stop`; this preserves its database volume. Confirm ports `3000` and `8000` are free before continuing. Restart the default stack later with `docker compose up -d`. Do not use `down -v` to free ports.
+
+Create a private environment file outside the repository and start the isolated stack:
+
+
+```powershell
+$E2EProject = 'evidenceforge-e2e'
+$E2EEnvDir = Join-Path $env:TEMP $E2EProject
+$E2EEnvFile = Join-Path $E2EEnvDir '.env'
+
+if (Test-Path $E2EEnvFile) {
+    throw "E2E environment already exists at $E2EEnvFile. Do not overwrite it; reuse it with the restart commands below."
+}
+
+# Refuse to reuse containers or database volumes from an earlier E2E run.
+$existingContainers = @(docker ps -a --filter "label=com.docker.compose.project=$E2EProject" --format '{{.Names}}')
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot inspect Docker containers. Confirm Docker Desktop is running."
+}
+if ($existingContainers.Count -gt 0) {
+    $existingContainers
+    throw "Existing E2E containers found. Inspect them and use the restart procedure if appropriate."
+}
+
+$allVolumes = @(docker volume ls --format '{{.Name}}')
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot inspect Docker volumes. Confirm Docker Desktop is running."
+}
+$existingVolumes = @($allVolumes | Where-Object { $_ -like "${E2EProject}_*" })
+if ($existingVolumes.Count -gt 0) {
+    $existingVolumes
+    throw "An E2E database volume already exists. Inspect it; do not silently reuse it as a new test database."
+}
+foreach ($port in @(3000, 8000)) {
+    $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+    if ($listeners.Count -gt 0) {
+        throw "Port $port is already in use. Identify the owning process before proceeding; no containers were started."
+    }
+}
+
+New-Item -ItemType Directory -Path $E2EEnvDir -Force | Out-Null
+$E2EPassword = [guid]::NewGuid().ToString('N')
+$E2EEnvLines = @(
+    'ENVIRONMENT=development'
+    'LOG_LEVEL=INFO'
+    'POSTGRES_DB=evidenceforge_e2e'
+    'POSTGRES_USER=evidenceforge'
+    "POSTGRES_PASSWORD=$E2EPassword"
+    "DATABASE_URL=postgresql+psycopg://evidenceforge:$($E2EPassword)@db:5432/evidenceforge_e2e"
+    'EVIDENCEFORGE_API_URL=http://api:8000'
+)
+[System.IO.File]::WriteAllLines($E2EEnvFile, $E2EEnvLines, [System.Text.Encoding]::ASCII)
+
+# A distinct project name gives this test stack its own containers and volume.
+docker compose --project-name $E2EProject --env-file $E2EEnvFile up --build -d
+if ($LASTEXITCODE -ne 0) {
+    throw "Compose startup failed. Preserve the environment file and inspect logs; do not delete volumes."
+}
+docker compose --project-name $E2EProject --env-file $E2EEnvFile ps
+```
+
+Wait for the API, database readiness, frontend proxy, and guided route to respond:
+
+```powershell
+$deadline = (Get-Date).AddMinutes(5)
+$e2eReady = $false
+while ((Get-Date) -lt $deadline) {
+    try {
+        $live = Invoke-RestMethod -Uri 'http://localhost:8000/health/live' -TimeoutSec 5
+        $ready = Invoke-RestMethod -Uri 'http://localhost:8000/health/ready' -TimeoutSec 5
+        $proxy = Invoke-WebRequest -Uri 'http://localhost:3000/backend-api/health/live' -UseBasicParsing -TimeoutSec 5
+        $guided = Invoke-WebRequest -Uri 'http://localhost:3000/guided' -UseBasicParsing -TimeoutSec 5
+        if ($live.status -eq 'ok' -and $ready.database -eq 'ok' -and $proxy.StatusCode -eq 200 -and $guided.StatusCode -eq 200) {
+            $e2eReady = $true
+            break
+        }
+    } catch {
+        Start-Sleep -Seconds 3
+    }
+}
+if (-not $e2eReady) {
+    docker compose --project-name $E2EProject --env-file $E2EEnvFile logs --tail 100 api web db
+    throw 'E2E stack did not become healthy within five minutes. Review logs; do not reset the database.'
+}
+Write-Host 'API liveness/readiness, frontend API proxy, and /guided all responded successfully.'
+```
+
+Before provisioning a local owner, verify that the running API points to the dedicated database by printing only its database name:
+
+```powershell
+$E2EDatabase = docker compose --project-name $E2EProject --env-file $E2EEnvFile exec -T api python -c "import os; from sqlalchemy.engine import make_url; print(make_url(os.environ['DATABASE_URL']).database)"
+if ($LASTEXITCODE -ne 0 -or $E2EDatabase.Trim() -ne 'evidenceforge_e2e') {
+    throw 'STOP: The API is not connected to the expected disposable E2E database.'
+}
+Write-Host "Verified isolated database: $($E2EDatabase.Trim())"
+```
+
+Protected UI/API workflows require the operator-only first-user bootstrap. Read the [First-user bootstrap operator runbook](docs/bootstrap-operator-runbook.md) and verify every precondition before provisioning.
+
+**Important:** These commands must target the isolated E2E Compose project. Always add `--project-name $E2EProject --env-file $E2EEnvFile` to Compose commands from the runbook.
+
+Check the bootstrap CLI and migration state first:
+
+```powershell
+docker compose --project-name $E2EProject --env-file $E2EEnvFile exec api evidenceforge-bootstrap --help
+docker compose --project-name $E2EProject --env-file $E2EEnvFile exec -T api alembic current
+docker compose --project-name $E2EProject --env-file $E2EEnvFile exec -T api alembic heads
+```
+
+Verify the database and authorized identity before running bootstrap. Run it only once, using the approved local identity and the exact arguments documented in the runbook. Never invent an identity subject, insert token records manually, or expose the one-time bearer token in logs or screenshots.
+
+Open `http://localhost:3000/guided`. Use genuine IDs returned by the API, not placeholder UUIDs. For an end-to-end manual smoke test with synthetic data, verify: (1) authenticate with the authorized local token; (2) import a valid synthetic `.xlsx`; (3) create/upload a synthetic `.md` or `.txt` evidence document; (4) list its versions/chunks and ground an imported question; (5) save a response with an authorized citation; (6) repeat the same update and verify idempotency; (7) change the response and verify the next revision/history; (8) exercise the supported human-review action; and (9) check unauthorized-workspace and invalid-citation rejection. Evidence grounding returns candidates; it is not end-to-end LLM answer generation.
+
+The repository does not currently declare a Playwright dependency or a committed browser-E2E test script. The checks above prepare and smoke-test the real stack; do not report the browser workflow as automated Playwright E2E until a browser test suite has actually been added and run.
+
+For later sessions, reuse the existing private environment file and preserved test database rather than regenerating credentials:
+
+```powershell
+$E2EProject = 'evidenceforge-e2e'
+$E2EEnvFile = Join-Path (Join-Path $env:TEMP $E2EProject) '.env'
+docker compose --project-name $E2EProject --env-file $E2EEnvFile up -d
+docker compose --project-name $E2EProject --env-file $E2EEnvFile ps
+```
+
+Stop the isolated containers while preserving the database volume and environment file:
+
+```powershell
+docker compose --project-name $E2EProject --env-file $E2EEnvFile down
+```
+
+Do not append `-v` during routine shutdown; it deletes the volume containing the disposable E2E database. Keep this environment separate from the default Compose project.
 
 ### Local Python development (optional)
 
