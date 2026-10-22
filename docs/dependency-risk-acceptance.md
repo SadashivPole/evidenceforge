@@ -86,7 +86,7 @@ A fresh frontend audit on 2026-10-21 reported:
 
 The production-only result does not prove the affected package is absent from the current frontend container. `frontend/Dockerfile` runs `npm ci` and starts `npm run dev`; a production-optimized frontend image and its dependency inventory have not been validated. Do not run `npm audit fix --force` as a blind remediation because npm proposed a breaking downgrade of `eslint-config-next`.
 
-The push-triggered CI run for current `main` (`3e7529b4307d867dc720a597ab6a7564e340726f`) completed successfully with all four jobs passing: Backend, Frontend, PostgreSQL bootstrap/authentication, and PostgreSQL concurrency. Passing CI does not resolve the advisory or independently establish production deployment safety.
+The push-triggered CI run for the pre-release documentation baseline (`f96760d01a9c3eddb65bd2119e69ed0ff5c5d5fc`; [run 39606573588](https://github.com/SadashivPole/evidenceforge/actions/runs/39606573588)) completed successfully with all four jobs passing: Backend, Frontend, PostgreSQL bootstrap/authentication, and PostgreSQL concurrency. Passing CI does not resolve the advisory or independently establish production deployment safety.
 
 The temporary acceptance remains in effect until reassessment, due no later than 2026-11-02. This is not a claim that the affected package is safe, and the full dependency audit must not be described as clean.
 
