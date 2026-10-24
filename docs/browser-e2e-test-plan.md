@@ -1,13 +1,13 @@
 # Browser E2E Test Plan
 
-Date: 23 October 2026 · baseline reviewed: `c3b75dc` (public `main`)
+Date: 24 October 2026 · baseline reviewed: `3245974` (public `main`)
 
 This document defines today's smoke-test scaffold and the boundary between it
 and the full guided-review workflow browser suite planned as follow-up work.
 
 ## 1. Scope
 
-| Area | Today (implemented + executed) | Follow-up (planned, **NOT** tested today) |
+| Area | Current implementation / validation | Follow-up (planned, **NOT** tested today) |
 | --- | --- | --- |
 | Guided workbench rendering | `/guided` landmark assertions: hero heading, "Connect to EvidenceForge" card, session-token field, `Connect` button, default "Not connected" state | — |
 | Routing | `/` redirects to `/guided` | — |
@@ -21,7 +21,7 @@ and the full guided-review workflow browser suite planned as follow-up work.
 | Revision history | — | changed answer yields one new revision |
 | Human-review operations | — | explicit ACCEPT / EDIT_AND_APPROVE / REJECT |
 | Unauthorized / cross-workspace access | — | 401/404 and workspace-scoping boundary probes |
-| CI integration | — | add a CI job **only after** the suite is proven non-flaky locally; not included today |
+| CI integration | GitHub Actions job configured; first hosted run pending | Full guided-review workflow browser coverage remains follow-up work |
 
 Nothing in the right-hand column is claimed as browser-tested today. Backend
 coverage of these behaviors continues to live in `backend/tests/`.
@@ -30,6 +30,7 @@ coverage of these behaviors continues to live in `backend/tests/`.
 
 | Path | Purpose |
 | --- | --- |
+| `.github/workflows/ci.yml` | Adds an isolated Playwright smoke job using a disposable PostgreSQL/pgvector service. |
 | `frontend/package.json` | pins `@playwright/test@1.64.1`, adds `npm run test:e2e` |
 | `frontend/package-lock.json` | lockfile updated by `npm install` (npm conventions) |
 | `frontend/playwright.config.ts` | base URL from `PLAYWRIGHT_BASE_URL` (default `http://127.0.0.1:3000`); chromium only; no `webServer` hook on purpose |
