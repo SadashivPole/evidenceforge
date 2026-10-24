@@ -1,2 +1,6 @@
 .next
 node_modules
+
+# Playwright local artifacts
+test-results
+playwright-report
