@@ -224,3 +224,159 @@ jobs:
           CI: "true"
           EVIDENCEFORGE_MIGRATION_TEST_DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@localhost:5432/evidenceforge_migration_backfill_it
         run: python -m pytest -q backend/tests/test_migration_0008_backfill_postgres.py
+
+  playwright-smoke:
+    name: Playwright browser smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: evidenceforge
+          POSTGRES_PASSWORD: evidenceforge
+          POSTGRES_DB: evidenceforge_playwright_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U evidenceforge -d evidenceforge_playwright_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://evidenceforge:evidenceforge@127.0.0.1:5432/evidenceforge_playwright_ci
+      ENVIRONMENT: test
+      LOG_LEVEL: INFO
+      EVIDENCEFORGE_API_URL: http://127.0.0.1:8000
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install backend development dependencies
+        run: python -m pip install -e "backend[dev]"
+
+      - name: Enable pgvector extension
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+
+          engine = create_engine(os.environ["DATABASE_URL"])
+          try:
+              with engine.begin() as connection:
+                  connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+          finally:
+              engine.dispose()
+          PY
+
+      - name: Apply database migrations
+        working-directory: backend
+        run: python -m alembic upgrade head
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright Chromium and system dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start services and run Playwright smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_log="$RUNNER_TEMP/evidenceforge-api.log"
+          web_log="$RUNNER_TEMP/evidenceforge-web.log"
+
+          (cd backend && exec python -m uvicorn app.main:app --host 127.0.0.1 --port 8000) \
+            > "$api_log" 2>&1 &
+          api_pid=$!
+
+          (cd frontend && exec npm run start -- --hostname 127.0.0.1) \
+            > "$web_log" 2>&1 &
+          web_pid=$!
+
+          cleanup() {
+            kill "$web_pid" "$api_pid" 2>/dev/null || true
+            wait "$web_pid" "$api_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          api_ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent --max-time 3 \
+              http://127.0.0.1:8000/health/ready >/dev/null; then
+              api_ready=1
+              echo "API readiness check passed."
+              break
+            fi
+            if ! kill -0 "$api_pid" 2>/dev/null; then
+              echo "API process exited. API log follows:"
+              cat "$api_log"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ "$api_ready" -ne 1 ]; then
+            echo "API did not become ready. API log follows:"
+            cat "$api_log"
+            exit 1
+          fi
+
+          web_ready=0
+          for attempt in {1..60}; do
+            if curl --fail --silent --max-time 3 \
+              http://127.0.0.1:3000/guided >/dev/null; then
+              web_ready=1
+              echo "Guided workbench readiness check passed."
+              break
+            fi
+            if ! kill -0 "$web_pid" 2>/dev/null; then
+              echo "Frontend process exited. Frontend log follows:"
+              cat "$web_log"
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ "$web_ready" -ne 1 ]; then
+            echo "Frontend did not become ready. Frontend log follows:"
+            cat "$web_log"
+            exit 1
+          fi
+
+          cd frontend
+          npm run test:e2e
+
+      - name: Upload browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-smoke-diagnostics
+          path: |
+            frontend/test-results/
+            ${{ runner.temp }}/evidenceforge-api.log
+            ${{ runner.temp }}/evidenceforge-web.log
+          if-no-files-found: ignore
+          retention-days: 7
