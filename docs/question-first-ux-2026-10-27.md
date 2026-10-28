@@ -88,3 +88,11 @@ No real token, customer evidence, production database, or external service is us
 - The frontend Docker image built successfully. The isolated Compose database, API, and web services reported healthy; all five API, page, and proxy HTTP smoke checks returned 200.
 - The existing backend image was reused only after application/configuration SHA-256 hashes matched the workspace, excluding Python cache files. The modified backend Dockerfile was not freshly built because disk space was limited.
 - Candidate GitHub Actions jobs still need a hosted run. The Ollama adapter remains unwired to production API/UI generation, and real-model runtime and quality metrics remain unmeasured.
+
+## Verification update (2026-10-28)
+
+- Hosted GitHub Actions run [#54](https://github.com/SadashivPole/evidenceforge/actions/runs/40617147850) passed all eight jobs for the candidate merged through [PR #27](https://github.com/SadashivPole/evidenceforge/pull/27).
+- The hosted Docker image/Compose job freshly built both backend and frontend images and passed its startup, readiness, guided-page, API proxy, negative-control, and teardown checks.
+- The local backend suite reported 806 passed and 31 skipped. Frontend lint, typecheck, format checks, and the recorded Playwright checks passed.
+- The local Compose check reused the backend image after source/configuration hash parity checks due to local disk constraints. The hosted run provides the fresh backend Docker build verification.
+- The optional Ollama adapter remains unwired to a production API/UI generation route. Real-model runtime, inference performance, and answer-quality metrics remain unmeasured.
