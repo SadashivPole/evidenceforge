@@ -1,4 +1,14 @@
+.git
 node_modules
 .next
 out
+test-results
+playwright-report
+e2e
+playwright.config.ts
+playwright.workflow.config.ts
+coverage
 npm-debug.log*
+*.tsbuildinfo
+Dockerfile
+.dockerignore

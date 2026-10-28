@@ -1,6 +1,23 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  meaningfulTerms,
+  searchQuestions,
+  type QuestionSearchEntry,
+  type QuestionSearchOutcome,
+} from "./questionSearch";
+import {
+  suggestNextQuestion,
+  type QuestionResponseSummary,
+} from "./suggestion";
 import styles from "./guided.module.css";
 
 type ResponseStatus =
@@ -73,6 +90,9 @@ type GroundingResult = {
   matched_terms: string[];
   exact_phrase_match: boolean;
   occurrence_count: number;
+  rrf_score?: number | null;
+  lexical_rank?: number | null;
+  semantic_rank?: number | null;
 };
 type GroundingResponse = {
   normalized_query: string;
@@ -107,6 +127,14 @@ type QuestionnaireImportResult = {
   version_id: string;
   outcome: string;
 };
+type VersionResponseSummary = {
+  questionnaire_version_question_id: string;
+  current_revision: {
+    status: ResponseStatus;
+    answer: string | null;
+  };
+};
+type QuestionSearchState = "idle" | "loading" | "results" | "empty" | "error";
 
 const emptySelection: Selection = {
   workspaceId: "",
@@ -125,6 +153,11 @@ const statuses: ResponseStatus[] = [
   "NOT_APPLICABLE",
   "DO_NOT_DISCLOSE",
 ];
+
+const QUESTION_QUERY_MIN_LENGTH = 3;
+const QUESTION_QUERY_MAX_LENGTH = 500;
+const QUESTION_MATCH_LIMIT = 5;
+const emptyResponseSummaries: QuestionResponseSummary[] = [];
 
 class ApiError extends Error {
   status: number;
@@ -154,6 +187,22 @@ function resourcePath(
     pathPart(selection.questionId),
     resource,
   ].join("/");
+}
+
+function versionsPath(workspaceId: string, questionnaireId: string) {
+  return `/workspaces/${pathPart(workspaceId)}/questionnaires/${pathPart(questionnaireId)}/versions`;
+}
+
+function questionsPath(
+  workspaceId: string,
+  questionnaireId: string,
+  versionId: string,
+) {
+  return `/workspaces/${pathPart(workspaceId)}/questionnaires/${pathPart(questionnaireId)}/versions/${pathPart(versionId)}/questions`;
+}
+
+function versionResponsesPath(selection: Selection) {
+  return `/workspaces/${pathPart(selection.workspaceId)}/questionnaires/${pathPart(selection.questionnaireId)}/versions/${pathPart(selection.versionId)}/responses`;
 }
 
 async function requestApi<T>(
@@ -205,7 +254,23 @@ function isComplete(selection: Selection): boolean {
   return Object.values(selection).every((value) => value.trim().length > 0);
 }
 
+// Deterministic, effect-free hydration/readiness signal. useSyncExternalStore
+// uses the server snapshot (false) during SSR and the hydration render, then
+// switches to the client snapshot (true) after hydration commits and React has
+// attached this client component's event handlers. Exposing it as the
+// `data-hydrated` attribute on the root shell gives browser tests (and any
+// consumer) a state-based readiness cue to wait on instead of a fixed sleep.
+// It changes no user-facing behavior and leaves the unsaved-work guards intact.
+const noopSubscribe = () => () => {};
+const clientHydrated = () => true;
+const serverHydrated = () => false;
+
 export default function GuidedQuestionReview() {
+  const hydrated = useSyncExternalStore(
+    noopSubscribe,
+    clientHydrated,
+    serverHydrated,
+  );
   const [token, setToken] = useState("");
   const [connected, setConnected] = useState(false);
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
@@ -237,6 +302,28 @@ export default function GuidedQuestionReview() {
   const [notice, setNotice] = useState("");
   const [questionnaireFilter, setQuestionnaireFilter] = useState("");
   const [questionFilter, setQuestionFilter] = useState("");
+  const [isLoadingWorkspaceData, setIsLoadingWorkspaceData] = useState(false);
+  const [questionQuery, setQuestionQuery] = useState("");
+  const [questionSearchState, setQuestionSearchState] =
+    useState<QuestionSearchState>("idle");
+  const [questionSearchMessage, setQuestionSearchMessage] = useState("");
+  const [questionSearchOutcome, setQuestionSearchOutcome] =
+    useState<QuestionSearchOutcome | null>(null);
+  const [searchIndex, setSearchIndex] = useState<QuestionSearchEntry[]>([]);
+  const [searchIndexWorkspaceId, setSearchIndexWorkspaceId] = useState("");
+  const [isIndexingQuestions, setIsIndexingQuestions] = useState(false);
+  const [responseSummaries, setResponseSummaries] = useState<
+    QuestionResponseSummary[]
+  >([]);
+  const [responseSummariesKey, setResponseSummariesKey] = useState("");
+  const [responseStatusesAvailable, setResponseStatusesAvailable] =
+    useState(false);
+  const [responseStatusWarning, setResponseStatusWarning] = useState("");
+  const workspaceEpochRef = useRef(0);
+  const searchVersionsRef = useRef<Record<string, VersionOption[]>>({});
+  const searchQuestionsByVersionRef = useRef<Record<string, QuestionOption[]>>(
+    {},
+  );
 
   const selectedQuestion =
     questions.find((question) => question.id === selection.questionId) ?? null;
@@ -245,6 +332,12 @@ export default function GuidedQuestionReview() {
     null;
   const selectedVersion =
     versions.find((item) => item.id === selection.versionId) ?? null;
+  const selectedWorkspace =
+    workspaces.find((item) => item.id === selection.workspaceId) ?? null;
+  const contextWorkspaceName = selectedWorkspace?.name ?? "Selected workspace";
+  const contextQuestionnaireName =
+    selectedQuestionnaire?.name ?? "Selected questionnaire";
+  const contextVersionNumber = selectedVersion?.version_number ?? null;
   const selectedResults = useMemo(
     () =>
       grounding?.results.filter((result) =>
@@ -274,6 +367,60 @@ export default function GuidedQuestionReview() {
         item.section_path.join(" / ").toLowerCase().includes(term),
     );
   }, [questions, questionFilter, selection.questionId]);
+
+  const currentVersionEntries = useMemo<QuestionSearchEntry[]>(() => {
+    if (!isComplete(selection)) return [];
+    return questions.map((question) => ({
+      ...question,
+      workspaceId: selection.workspaceId,
+      workspaceName: contextWorkspaceName,
+      questionnaireId: selection.questionnaireId,
+      questionnaireName: contextQuestionnaireName,
+      versionId: selection.versionId,
+      versionNumber: contextVersionNumber ?? 0,
+      versionSourceFilename: selectedVersion?.source_filename ?? "",
+    }));
+  }, [
+    questions,
+    selection,
+    contextWorkspaceName,
+    contextQuestionnaireName,
+    contextVersionNumber,
+    selectedVersion,
+  ]);
+  const activeEntry =
+    currentVersionEntries.find((item) => item.id === selection.questionId) ??
+    null;
+  const versionKey = [
+    selection.workspaceId,
+    selection.questionnaireId,
+    selection.versionId,
+  ].join(":");
+  const activeResponseStatusAvailable =
+    responseStatusesAvailable && responseSummariesKey === versionKey;
+  const activeResponseSummaries = activeResponseStatusAvailable
+    ? responseSummaries
+    : emptyResponseSummaries;
+  const activeResponseStatusWarning =
+    responseSummariesKey === versionKey ? responseStatusWarning : "";
+  const suggestion = useMemo(() => {
+    if (!activeEntry || !grounding) return null;
+    return suggestNextQuestion({
+      current: activeEntry,
+      questions: currentVersionEntries,
+      responses: activeResponseSummaries,
+      responseStatusAvailable: activeResponseStatusAvailable,
+      evidenceTexts: grounding.results.map(
+        (result) => result.candidate.content,
+      ),
+    });
+  }, [
+    activeEntry,
+    grounding,
+    currentVersionEntries,
+    activeResponseSummaries,
+    activeResponseStatusAvailable,
+  ]);
 
   // Browser-level unsaved-work guard: closing or reloading the tab with a dirty
   // draft must prompt, not silently discard. In-component navigation paths are
@@ -305,6 +452,26 @@ export default function GuidedQuestionReview() {
     setError("");
   }
 
+  function resetQuestionDiscovery() {
+    setQuestionQuery("");
+    setQuestionSearchState("idle");
+    setQuestionSearchMessage("");
+    setQuestionSearchOutcome(null);
+    setSearchIndex([]);
+    setSearchIndexWorkspaceId("");
+    searchVersionsRef.current = {};
+    searchQuestionsByVersionRef.current = {};
+    setIsIndexingQuestions(false);
+    clearResponseStatuses();
+  }
+
+  function clearResponseStatuses() {
+    setResponseSummaries([]);
+    setResponseSummariesKey("");
+    setResponseStatusesAvailable(false);
+    setResponseStatusWarning("");
+  }
+
   async function loadQuestionnaires(
     workspaceId: string,
   ): Promise<QuestionnaireOption[]> {
@@ -332,7 +499,7 @@ export default function GuidedQuestionReview() {
     setIsLoadingQuestions(true);
     try {
       const result = await requestApi<QuestionOption[]>(
-        `/workspaces/${pathPart(workspaceId)}/questionnaires/${pathPart(questionnaireId)}/versions/${pathPart(versionId)}/questions`,
+        questionsPath(workspaceId, questionnaireId, versionId),
         token,
       );
       setQuestions(result);
@@ -340,6 +507,293 @@ export default function GuidedQuestionReview() {
     } finally {
       setIsLoadingQuestions(false);
     }
+  }
+
+  /**
+   * Build a workspace-local discovery index from the existing authorized
+   * version/question list endpoints. IDs stay in state and URLs; every visible
+   * label comes from the questionnaire/version/question records themselves.
+   */
+  async function loadSearchIndex(
+    workspaceId: string,
+    items: QuestionnaireOption[],
+    workspaceName: string,
+  ): Promise<QuestionSearchEntry[]> {
+    const epoch = workspaceEpochRef.current;
+    const versionLists = await Promise.all(
+      items.map(async (item) => ({
+        item,
+        versions: await requestApi<VersionOption[]>(
+          versionsPath(workspaceId, item.id),
+          token,
+        ),
+      })),
+    );
+    const requests: Array<{
+      item: QuestionnaireOption;
+      version: VersionOption;
+      request: Promise<QuestionOption[]>;
+    }> = [];
+    for (const { item, versions } of versionLists) {
+      for (const version of versions) {
+        requests.push({
+          item,
+          version,
+          request: requestApi<QuestionOption[]>(
+            questionsPath(workspaceId, item.id, version.id),
+            token,
+          ),
+        });
+      }
+    }
+    const resolved = await Promise.all(
+      requests.map(async ({ item, version, request }) => ({
+        item,
+        version,
+        questionRows: await request,
+      })),
+    );
+    if (epoch !== workspaceEpochRef.current) return [];
+
+    const nextVersions: Record<string, VersionOption[]> = {};
+    const nextQuestions: Record<string, QuestionOption[]> = {};
+    const entries: QuestionSearchEntry[] = [];
+    for (const { item, versions } of versionLists) {
+      nextVersions[item.id] = versions;
+    }
+    for (const { item, version, questionRows } of resolved) {
+      nextQuestions[version.id] = questionRows;
+      for (const question of questionRows) {
+        entries.push({
+          ...question,
+          workspaceId,
+          workspaceName,
+          questionnaireId: item.id,
+          questionnaireName: item.name,
+          versionId: version.id,
+          versionNumber: version.version_number,
+          versionSourceFilename: version.source_filename,
+        });
+      }
+    }
+    searchVersionsRef.current = nextVersions;
+    searchQuestionsByVersionRef.current = nextQuestions;
+    setSearchIndex(entries);
+    setSearchIndexWorkspaceId(workspaceId);
+    return entries;
+  }
+
+  /** Load real saved-response status for the current authorized version. */
+  async function loadResponseSummaries(forSelection: Selection) {
+    if (
+      !forSelection.workspaceId.trim() ||
+      !forSelection.questionnaireId.trim() ||
+      !forSelection.versionId.trim()
+    ) {
+      return;
+    }
+    const key = [
+      forSelection.workspaceId,
+      forSelection.questionnaireId,
+      forSelection.versionId,
+    ].join(":");
+    const epoch = workspaceEpochRef.current;
+    try {
+      const result = await requestApi<VersionResponseSummary[]>(
+        versionResponsesPath(forSelection),
+        token,
+      );
+      if (epoch !== workspaceEpochRef.current) return;
+      setResponseSummaries(
+        result.map((item) => ({
+          questionId: item.questionnaire_version_question_id,
+          status: item.current_revision.status,
+          answer: item.current_revision.answer,
+        })),
+      );
+      setResponseSummariesKey(key);
+      setResponseStatusesAvailable(true);
+      setResponseStatusWarning("");
+    } catch {
+      if (epoch !== workspaceEpochRef.current) return;
+      setResponseSummaries([]);
+      setResponseSummariesKey(key);
+      setResponseStatusesAvailable(false);
+      setResponseStatusWarning(
+        "Saved-response status could not be loaded; recommendations use question order and shared terms only.",
+      );
+    }
+  }
+
+  async function askQuestion(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const query = questionQuery.trim();
+
+    function setSearchError(message: string) {
+      setQuestionSearchState("error");
+      setQuestionSearchMessage(message);
+      setQuestionSearchOutcome(null);
+    }
+
+    if (!connected || !selection.workspaceId.trim()) {
+      setSearchError(
+        "Connect to EvidenceForge and choose an authorized workspace first.",
+      );
+      return;
+    }
+    if (query.length < QUESTION_QUERY_MIN_LENGTH) {
+      setSearchError(
+        `Enter at least ${QUESTION_QUERY_MIN_LENGTH} characters describing the question.`,
+      );
+      return;
+    }
+    if (query.length > QUESTION_QUERY_MAX_LENGTH) {
+      setSearchError(
+        `Keep your question under ${QUESTION_QUERY_MAX_LENGTH} characters.`,
+      );
+      return;
+    }
+    if (!meaningfulTerms(query).length) {
+      setSearchError(
+        "Use at least one specific word, such as “encryption”, “backup”, or “access”.",
+      );
+      return;
+    }
+    if (isLoadingWorkspaceData || isIndexingQuestions) {
+      setSearchError("Workspace data is still loading. Try again in a moment.");
+      return;
+    }
+
+    const epoch = workspaceEpochRef.current;
+    setQuestionSearchState("loading");
+    setQuestionSearchMessage("Searching authorized questions…");
+    setQuestionSearchOutcome(null);
+    setIsIndexingQuestions(true);
+    try {
+      if (!questionnaires.length) {
+        setQuestionSearchState("empty");
+        setQuestionSearchMessage(
+          "No questionnaires in this workspace yet. Upload an XLSX questionnaire below to get started.",
+        );
+        return;
+      }
+      const entries =
+        searchIndexWorkspaceId === selection.workspaceId
+          ? searchIndex
+          : await loadSearchIndex(
+              selection.workspaceId,
+              questionnaires,
+              contextWorkspaceName,
+            );
+      if (epoch !== workspaceEpochRef.current) return;
+      if (!entries.length) {
+        setQuestionSearchState("empty");
+        setQuestionSearchMessage(
+          "No imported questions were found in this workspace's questionnaire versions.",
+        );
+        return;
+      }
+
+      const outcome = searchQuestions(query, entries, QUESTION_MATCH_LIMIT);
+      setQuestionSearchOutcome(outcome);
+      setQuestionSearchState("results");
+      if (outcome.status === "NO_MATCHES") {
+        setQuestionSearchMessage(
+          "No authorized questionnaire question matched this wording. Try words from the questionnaire, or choose a question below.",
+        );
+        return;
+      }
+      if (outcome.status === "AMBIGUOUS") {
+        setQuestionSearchMessage(
+          `${outcome.matches.length} authorized questions could match. Choose the exact question to ground.`,
+        );
+        return;
+      }
+
+      const best = outcome.matches[0];
+      if (!best) {
+        setQuestionSearchMessage(
+          "No authorized questionnaire question matched this wording.",
+        );
+        return;
+      }
+      setQuestionSearchMessage(
+        "One authorized question matched. Retrieving its evidence…",
+      );
+      const explored = await exploreQuestion(best.entry);
+      if (epoch !== workspaceEpochRef.current) return;
+      setQuestionSearchMessage(
+        explored
+          ? "Question selected. See the retrieved evidence and suggested next question below."
+          : "Match found. Choose “Explore this question” when you are ready.",
+      );
+    } catch (caught) {
+      if (epoch !== workspaceEpochRef.current) return;
+      setSearchError(
+        caught instanceof Error
+          ? caught.message
+          : "Unable to load authorized questions.",
+      );
+    } finally {
+      if (epoch === workspaceEpochRef.current) setIsIndexingQuestions(false);
+    }
+  }
+
+  /** Select a real search-index entry and run the existing grounding flow. */
+  async function exploreQuestion(entry: QuestionSearchEntry): Promise<boolean> {
+    if (!confirmDiscard()) return false;
+    const next: Selection = {
+      workspaceId: entry.workspaceId,
+      questionnaireId: entry.questionnaireId,
+      versionId: entry.versionId,
+      questionId: entry.id,
+    };
+    clearQuestionState();
+    setSelection(next);
+    const availableVersions = [
+      ...(searchVersionsRef.current[entry.questionnaireId] ?? []),
+    ];
+    if (!availableVersions.some((version) => version.id === entry.versionId)) {
+      availableVersions.unshift({
+        id: entry.versionId,
+        questionnaire_id: entry.questionnaireId,
+        version_number: entry.versionNumber,
+        source_filename: entry.versionSourceFilename,
+        question_count:
+          searchQuestionsByVersionRef.current[entry.versionId]?.length ?? 1,
+        created_at: "",
+      });
+    }
+    const availableQuestions = [
+      ...(searchQuestionsByVersionRef.current[entry.versionId] ?? [entry]),
+    ];
+    if (!availableQuestions.some((question) => question.id === entry.id)) {
+      availableQuestions.unshift(entry);
+    }
+    setVersions(availableVersions);
+    setQuestions(availableQuestions);
+    setQuestionnaireFilter("");
+    setQuestionFilter("");
+    await Promise.all([loadResponse(next, true), loadResponseSummaries(next)]);
+    await runGrounding(next, true);
+    return true;
+  }
+
+  /** Explore a suggested question in the already selected questionnaire version. */
+  async function exploreCurrentVersionQuestion(
+    questionId: string,
+  ): Promise<boolean> {
+    if (!confirmDiscard()) return false;
+    clearQuestionState();
+    const next = { ...selection, questionId };
+    setSelection(next);
+    setQuestionFilter("");
+    await Promise.all([loadResponse(next, true), loadResponseSummaries(next)]);
+    await runGrounding(next, true);
+    document
+      .getElementById("question-heading")
+      ?.scrollIntoView({ block: "start" });
+    return true;
   }
 
   async function connectToEvidenceForge() {
@@ -377,7 +831,9 @@ export default function GuidedQuestionReview() {
 
   async function chooseWorkspace(workspaceId: string, skipGuard = false) {
     if (!skipGuard && !confirmDiscard()) return;
+    workspaceEpochRef.current += 1;
     clearQuestionState();
+    resetQuestionDiscovery();
     setSelection({
       workspaceId,
       questionnaireId: "",
@@ -390,7 +846,11 @@ export default function GuidedQuestionReview() {
     setDocuments([]);
     setQuestionnaireFilter("");
     setQuestionFilter("");
-    if (!workspaceId) return;
+    if (!workspaceId) {
+      setIsLoadingWorkspaceData(false);
+      return;
+    }
+    setIsLoadingWorkspaceData(true);
     try {
       const [items] = await Promise.all([
         loadQuestionnaires(workspaceId),
@@ -407,12 +867,15 @@ export default function GuidedQuestionReview() {
           ? caught.message
           : "Unable to load this workspace.",
       );
+    } finally {
+      setIsLoadingWorkspaceData(false);
     }
   }
 
   async function chooseQuestionnaire(questionnaireId: string) {
     if (!confirmDiscard()) return;
     clearQuestionState();
+    clearResponseStatuses();
     setSelection((current) => ({
       ...current,
       questionnaireId,
@@ -425,7 +888,7 @@ export default function GuidedQuestionReview() {
     if (!questionnaireId || !selection.workspaceId) return;
     try {
       const available = await requestApi<VersionOption[]>(
-        `/workspaces/${pathPart(selection.workspaceId)}/questionnaires/${pathPart(questionnaireId)}/versions`,
+        versionsPath(selection.workspaceId, questionnaireId),
         token,
       );
       setVersions(available);
@@ -458,6 +921,7 @@ export default function GuidedQuestionReview() {
   async function chooseVersion(versionId: string) {
     if (!confirmDiscard()) return;
     clearQuestionState();
+    clearResponseStatuses();
     setSelection((current) => ({ ...current, versionId, questionId: "" }));
     setQuestions([]);
     setQuestionFilter("");
@@ -491,7 +955,7 @@ export default function GuidedQuestionReview() {
     setSelection(next);
     if (!questionId) return;
     // Load the saved answer automatically; grounding remains an explicit next step.
-    await loadResponse(next);
+    await Promise.all([loadResponse(next), loadResponseSummaries(next)]);
   }
 
   async function importQuestionnaire() {
@@ -539,6 +1003,8 @@ export default function GuidedQuestionReview() {
         );
       }
       const imported = payload as QuestionnaireImportResult;
+      workspaceEpochRef.current += 1;
+      resetQuestionDiscovery();
       const available = await loadQuestionnaires(selection.workspaceId);
       if (!available.some((item) => item.id === imported.questionnaire_id)) {
         throw new Error(
@@ -546,7 +1012,7 @@ export default function GuidedQuestionReview() {
         );
       }
       const nextVersions = await requestApi<VersionOption[]>(
-        `/workspaces/${pathPart(selection.workspaceId)}/questionnaires/${pathPart(imported.questionnaire_id)}/versions`,
+        versionsPath(selection.workspaceId, imported.questionnaire_id),
         token,
       );
       setVersions(nextVersions);
@@ -577,17 +1043,20 @@ export default function GuidedQuestionReview() {
     }
   }
 
-  async function runGrounding() {
+  async function runGrounding(
+    forSelection: Selection = selection,
+    skipGuard = false,
+  ) {
     setError("");
     setNotice("");
-    if (!isComplete(selection)) {
+    if (!isComplete(forSelection)) {
       setError(
         "Choose a workspace, questionnaire, version, and question first.",
       );
       return;
     }
-    if (isDirty && !confirmDiscard()) return;
-    if (isDirty) {
+    if (!skipGuard && isDirty && !confirmDiscard()) return;
+    if (!skipGuard && isDirty) {
       setAnswer(persistedResponse?.current_revision.answer ?? "");
       setResponseStatus(
         persistedResponse?.current_revision.status ?? "NEEDS_REVIEW",
@@ -604,7 +1073,7 @@ export default function GuidedQuestionReview() {
     setIsGrounding(true);
     try {
       const result = await requestApi<GroundingResponse>(
-        resourcePath(selection, "grounding"),
+        resourcePath(forSelection, "grounding"),
         token,
       );
       setGrounding(result);
@@ -631,8 +1100,11 @@ export default function GuidedQuestionReview() {
     }
   }
 
-  async function loadResponse(forSelection: Selection = selection) {
-    if (isDirty && !confirmDiscard()) return;
+  async function loadResponse(
+    forSelection: Selection = selection,
+    skipGuard = false,
+  ) {
+    if (!skipGuard && isDirty && !confirmDiscard()) return;
     setError("");
     setNotice("");
     if (!isComplete(forSelection)) return;
@@ -772,7 +1244,7 @@ export default function GuidedQuestionReview() {
   }
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-hydrated={hydrated ? "true" : "false"}>
       <header className={styles.topbar}>
         <div className={styles.brand}>
           <span className={styles.mark}>EF</span>
@@ -788,7 +1260,7 @@ export default function GuidedQuestionReview() {
       <main className={styles.main}>
         <section className={styles.intro}>
           <div>
-            <p className={styles.eyebrow}>Guided review</p>
+            <p className={styles.eyebrow}>Ask about your evidence</p>
             <h1>
               Choose a question.
               <br />
@@ -797,8 +1269,10 @@ export default function GuidedQuestionReview() {
               Save your answer.
             </h1>
             <p>
-              EvidenceForge finds relevant passages and lets an authorized
-              reviewer decide what supports the response.
+              Ask in your own words. Choose the closest question, review its
+              supporting evidence, then continue to a related question.
+              EvidenceForge retrieves real passages; an authorized reviewer
+              decides what supports the response.
             </p>
           </div>
           <div className={styles.steps}>
@@ -844,6 +1318,9 @@ export default function GuidedQuestionReview() {
                 value={token}
                 onChange={(event) => {
                   if (!confirmDiscard()) return;
+                  workspaceEpochRef.current += 1;
+                  resetQuestionDiscovery();
+                  setIsLoadingWorkspaceData(false);
                   setToken(event.target.value);
                   setConnected(false);
                   setWorkspaces([]);
@@ -873,6 +1350,202 @@ export default function GuidedQuestionReview() {
           </div>
         </section>
 
+        <section className={styles.askCard} aria-labelledby="ask-heading">
+          <div className={styles.cardHeading}>
+            <div>
+              <p className={styles.kicker}>Question match</p>
+              <h2 id="ask-heading">Ask about your evidence</h2>
+              <p className={styles.help}>
+                Type the question naturally. EvidenceForge compares it with
+                imported questions in the selected authorized workspace; it does
+                not generate an answer or a new question.
+              </p>
+            </div>
+            <span className={styles.pill}>
+              Deterministic word matching · no AI answer
+            </span>
+          </div>
+          <form
+            className={styles.askForm}
+            onSubmit={(event) => void askQuestion(event)}
+            aria-busy={questionSearchState === "loading" || isIndexingQuestions}
+          >
+            <label
+              className={styles.askLabel}
+              htmlFor="natural-language-question"
+            >
+              Ask a question in your own words
+            </label>
+            <div className={styles.askRow}>
+              <input
+                id="natural-language-question"
+                className={styles.askInput}
+                type="search"
+                value={questionQuery}
+                onChange={(event) => setQuestionQuery(event.target.value)}
+                placeholder="Ask a question about your controls, policies, or evidence…"
+                maxLength={QUESTION_QUERY_MAX_LENGTH}
+                aria-describedby={
+                  questionSearchState === "error"
+                    ? "question-query-help question-search-error"
+                    : "question-query-help"
+                }
+                aria-invalid={questionSearchState === "error"}
+                autoComplete="off"
+              />
+              <button
+                className={styles.primary}
+                type="submit"
+                disabled={
+                  !connected ||
+                  !selection.workspaceId.trim() ||
+                  isLoadingWorkspaceData ||
+                  questionSearchState === "loading" ||
+                  isIndexingQuestions ||
+                  isGrounding ||
+                  isSaving
+                }
+              >
+                {questionSearchState === "loading" || isIndexingQuestions
+                  ? "Searching authorized questions…"
+                  : "Find matching question"}
+              </button>
+            </div>
+            <p id="question-query-help" className={styles.help}>
+              Context: {contextWorkspaceName} · {contextQuestionnaireName} ·{" "}
+              {contextVersionNumber === null
+                ? "select a version below if needed"
+                : `Version ${contextVersionNumber}`}
+              . Press Enter or use the search button. IDs stay internal.
+            </p>
+          </form>
+
+          <div
+            className={styles.searchStatus}
+            role="status"
+            aria-label="Question search status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            {questionSearchMessage}
+          </div>
+
+          {questionSearchState === "error" ? (
+            <div
+              className={styles.error}
+              id="question-search-error"
+              role="alert"
+              aria-label="Question search error"
+            >
+              <strong>Question search couldn&apos;t be completed</strong>
+              <span>{questionSearchMessage}</span>
+              <button
+                className={styles.secondary}
+                type="button"
+                onClick={() => void askQuestion()}
+                disabled={isIndexingQuestions}
+              >
+                Try again
+              </button>
+            </div>
+          ) : null}
+
+          {questionSearchState === "empty" ? (
+            <div className={styles.empty} role="status">
+              <strong>Nothing to match yet</strong>
+              <span>{questionSearchMessage}</span>
+              <span>
+                You can still use the readable questionnaire, version, and
+                question selectors below.
+              </span>
+            </div>
+          ) : null}
+
+          {questionSearchState === "results" && questionSearchOutcome ? (
+            questionSearchOutcome.status === "NO_MATCHES" ? (
+              <div className={styles.empty} role="status">
+                <strong>No matching questionnaire question</strong>
+                <span>{questionSearchMessage}</span>
+                <span>
+                  No question was grounded and no evidence or citation was
+                  invented.
+                </span>
+              </div>
+            ) : (
+              <div className={styles.matchPanel}>
+                <div className={styles.matchPanelHeading}>
+                  <h3>
+                    {questionSearchOutcome.status === "AMBIGUOUS"
+                      ? "Several authorized questions could match"
+                      : "Closest authorized question"}
+                  </h3>
+                  <span className={styles.pill}>
+                    {questionSearchOutcome.status === "AMBIGUOUS"
+                      ? "Choose one to ground"
+                      : "Best match found"}
+                  </span>
+                </div>
+                <ul className={styles.matchList}>
+                  {questionSearchOutcome.matches.map((match, index) => {
+                    const entry = match.entry;
+                    const active =
+                      selection.questionId === entry.id &&
+                      selection.versionId === entry.versionId;
+                    return (
+                      <li
+                        className={`${styles.matchItem} ${active ? styles.matchItemActive : ""}`}
+                        key={`${entry.versionId}:${entry.id}`}
+                      >
+                        <div className={styles.matchItemHeader}>
+                          <span className={styles.matchNumber}>
+                            Q{entry.ordinal}
+                          </span>
+                          {index === 0 ? (
+                            <span className={styles.tag}>Best match</span>
+                          ) : null}
+                          {match.exactPhraseMatch ? (
+                            <span className={styles.tag}>Exact wording</span>
+                          ) : null}
+                          {active ? (
+                            <span className={styles.connected}>
+                              Grounding now
+                            </span>
+                          ) : null}
+                        </div>
+                        <h4 className={styles.matchQuestion}>
+                          {entry.question_text}
+                        </h4>
+                        <p className={styles.matchContext}>
+                          {entry.questionnaireName} · Version{" "}
+                          {entry.versionNumber} ·{" "}
+                          {entry.section_path.join(" / ") || entry.sheet_name}
+                        </p>
+                        {match.matchedTerms.length ? (
+                          <p className={styles.matchTerms}>
+                            Matched words:{" "}
+                            {match.matchedTerms.slice(0, 6).join(", ")}
+                          </p>
+                        ) : null}
+                        <button
+                          className={styles.secondary}
+                          type="button"
+                          onClick={() => void exploreQuestion(entry)}
+                          disabled={isGrounding || isSaving}
+                        >
+                          Explore this question
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <a className={styles.jumpLink} href="#evidence-heading">
+                  Jump to retrieved evidence
+                </a>
+              </div>
+            )
+          ) : null}
+        </section>
+
         <section
           className={styles.card}
           aria-labelledby="question-select-heading"
@@ -881,11 +1554,12 @@ export default function GuidedQuestionReview() {
             <div>
               <p className={styles.kicker}>Step 01</p>
               <h2 id="question-select-heading">
-                Find the question you need to answer
+                Or choose a question from the imported questionnaire
               </h2>
               <p className={styles.help}>
-                Choose names and question text. IDs are handled internally by
-                EvidenceForge.
+                The ask box above can select a question for you. This manual
+                path remains available and uses readable names and question
+                text; IDs stay in application state.
               </p>
             </div>
           </div>
@@ -1096,12 +1770,17 @@ export default function GuidedQuestionReview() {
           </h2>
           {selectedQuestion ? (
             <div className={styles.questionMeta}>
+              <span>{contextWorkspaceName}</span>
+              <span>{contextQuestionnaireName}</span>
+              <span>
+                Version{" "}
+                {activeEntry?.versionNumber ?? contextVersionNumber ?? "—"}
+              </span>
               <span>
                 {selectedQuestion.section_path.join(" / ") ||
                   selectedQuestion.sheet_name}
               </span>
               <span>Q{selectedQuestion.ordinal}</span>
-              <span>Version {selectedVersion?.version_number ?? "—"}</span>
               <span>
                 {grounding?.search_version ?? "Evidence not searched yet"}
               </span>
@@ -1118,13 +1797,14 @@ export default function GuidedQuestionReview() {
           <section className={styles.card} aria-labelledby="evidence-heading">
             <div className={styles.cardHeading}>
               <div>
-                <p className={styles.kicker}>Step 02 · Evidence</p>
+                <p className={styles.kicker}>Retrieved evidence · Step 02</p>
                 <h2 id="evidence-heading">
                   Which passages support your answer?
                 </h2>
                 <p className={styles.help}>
-                  These passages may be relevant. Check that each one actually
-                  supports your answer.
+                  These are actual passages returned by the authorized grounding
+                  endpoint. Check that each one really supports your answer
+                  before citing it.
                 </p>
               </div>
               {grounding ? (
@@ -1149,11 +1829,12 @@ export default function GuidedQuestionReview() {
                 </span>
               </div>
             ) : grounding.results.length === 0 ? (
-              <div className={styles.empty}>
-                <strong>No supporting passages found</strong>
+              <div className={styles.empty} role="status">
+                <strong>No evidence found for this question</strong>
                 <span>
-                  Do not guess. Check the question and evidence library, or save
-                  the answer as needing review.
+                  No supporting passages were returned, so no citation or answer
+                  was fabricated. Check the question and evidence library, or
+                  save the answer as needing review.
                 </span>
               </div>
             ) : (
@@ -1202,20 +1883,47 @@ export default function GuidedQuestionReview() {
                           {candidate.page_number !== null ? (
                             <span>Page {candidate.page_number}</span>
                           ) : null}
+                          {candidate.document_status &&
+                          candidate.document_status !== "active" ? (
+                            <span>
+                              Document {formatStatus(candidate.document_status)}
+                            </span>
+                          ) : null}
                         </div>
                         <details className={styles.technical}>
                           <summary>Technical details and provenance</summary>
+                          <p>
+                            Internal identifiers below are for debugging only.
+                            Normal review can rely on the source title, excerpt,
+                            version, section, page, and the citation checkbox.
+                          </p>
                           <p>Chunk ID: {candidate.chunk_id}</p>
                           <p>SHA-256: {candidate.content_hash}</p>
                           <p>
                             Normalized bytes: {candidate.normalized_start_byte}–
                             {candidate.normalized_end_byte}
                           </p>
-                          <p>
-                            Retrieval score: {result.score} · Matched terms:{" "}
-                            {result.matched_terms.join(", ") ||
-                              "phrase context"}
-                          </p>
+                          <p>Retrieval score: {result.score}</p>
+                          {result.matched_terms.length ? (
+                            <p>
+                              Matched terms: {result.matched_terms.join(", ")}
+                            </p>
+                          ) : null}
+                          {result.occurrence_count > 0 ? (
+                            <p>Occurrences: {result.occurrence_count}</p>
+                          ) : null}
+                          {result.rrf_score !== null &&
+                          result.rrf_score !== undefined ? (
+                            <p>Hybrid rank score: {result.rrf_score}</p>
+                          ) : null}
+                          {result.lexical_rank !== null &&
+                          result.lexical_rank !== undefined ? (
+                            <p>Lexical rank: {result.lexical_rank}</p>
+                          ) : null}
+                          {result.semantic_rank !== null &&
+                          result.semantic_rank !== undefined ? (
+                            <p>Semantic rank: {result.semantic_rank}</p>
+                          ) : null}
                         </details>
                       </div>
                       <span className={styles.useLabel}>
@@ -1393,6 +2101,86 @@ export default function GuidedQuestionReview() {
             </section>
           </aside>
         </div>
+
+        <section
+          className={styles.nextCard}
+          aria-labelledby="next-question-heading"
+        >
+          <div className={styles.cardHeading}>
+            <div>
+              <p className={styles.kicker}>Suggested next question</p>
+              <h2 id="next-question-heading">
+                Continue with a real questionnaire question
+              </h2>
+              <p className={styles.help}>
+                Suggestions use imported question order, real saved-response
+                status when available, and words shared with the current
+                question or actually retrieved evidence. No question is
+                generated by a model.
+              </p>
+            </div>
+            <span className={styles.pill}>No model-generated question</span>
+          </div>
+          {!grounding ? (
+            <div className={styles.empty} role="status">
+              <strong>Search a question&apos;s evidence first</strong>
+              <span>
+                Ask a question above or choose one below, then retrieve its
+                evidence to see a suggested next question.
+              </span>
+            </div>
+          ) : !suggestion ? (
+            <div className={styles.empty} role="status">
+              <strong>No suggested next question available</strong>
+              <span>
+                No later question exists in this authorized questionnaire
+                version. You can still choose any question above.
+              </span>
+            </div>
+          ) : (
+            <div className={styles.nextBody}>
+              <div className={styles.nextBasisRow}>
+                <span className={styles.tag}>{suggestion.label}</span>
+                <span className={styles.matchContext}>
+                  Q{suggestion.question.ordinal} ·{" "}
+                  {suggestion.question.section_path.join(" / ") ||
+                    suggestion.question.sheet_name}
+                </span>
+              </div>
+              <h3 className={styles.nextQuestion}>
+                {suggestion.question.question_text}
+              </h3>
+              <p className={styles.help}>{suggestion.detail}</p>
+              {activeResponseStatusWarning ? (
+                <p className={styles.warningText} role="status">
+                  {activeResponseStatusWarning}
+                </p>
+              ) : null}
+              {!grounding.results.length ? (
+                <p className={styles.help}>
+                  No evidence was found for the current question, so this
+                  suggestion uses only real questionnaire questions and saved
+                  response status. No citation or answer was fabricated.
+                </p>
+              ) : null}
+              {suggestion.sharedTerms.length ? (
+                <p className={styles.sharedTerms}>
+                  Shared terms: {suggestion.sharedTerms.slice(0, 6).join(", ")}
+                </p>
+              ) : null}
+              <button
+                className={styles.primary}
+                type="button"
+                onClick={() =>
+                  void exploreCurrentVersionQuestion(suggestion.question.id)
+                }
+                disabled={isGrounding || isLoadingResponse || isSaving}
+              >
+                Explore this question
+              </button>
+            </div>
+          )}
+        </section>
       </main>
       <footer className={styles.footer}>
         <span>EvidenceForge · guided review</span>

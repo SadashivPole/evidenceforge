@@ -89,8 +89,19 @@ Today, a developer can import XLSX questionnaire data, ingest supported evidence
 
 These are intended workflow benefits, not measured time savings or a security certification.
 
-## Implementation status
+## Product preview
 
+This is a real screenshot captured from the local EvidenceForge guided workbench on 27 October 2026, not a generated mockup. The capture shows a disconnected/empty state: no session is connected and no questionnaire or evidence has been selected. Use synthetic data and an authorized local session to explore the workflow.
+
+<p align="center">
+  <img src="docs/screenshots/evidenceforge-guided-overview.png" alt="EvidenceForge guided workbench showing natural-language question matching, questionnaire selection, evidence review, response editing, revision history, and deterministic next-question suggestions" width="100%">
+</p>
+
+[View the full-page guided workbench walkthrough (PDF)](docs/screenshots/evidenceforge-guided-workbench-walkthrough.pdf)
+
+> **Capability note:** Question matching and next-question suggestions are deterministic. Evidence retrieval returns candidates for a human reviewer to assess; this screen does not demonstrate AI-generated answers.
+
+## Implementation status
 Statuses describe what is present in the inspected source and what has evidence in the supplied local synthetic demo. **Implemented** means code exists; **Verified locally** is reserved for the concrete demo outcomes supplied with this request. No full test suite was executed as part of preparing this document.
 
 | Capability | Current status | What it does | Verification or limitation |
@@ -103,7 +114,7 @@ Statuses describe what is present in the inspected source and what has evidence 
 | Response persistence, approval, idempotency, revisions | Implemented | Stores one logical response per question with immutable revisions and citation records. | Supplied local demo covers MEMBER rejection, citation validation, idempotency, revision 2, and history. |
 | Explicit human review action | Implemented, not a complete review product | API and workbench support explicit accept/approve/edit-and-approve/reject operations against grounded context. | Source includes route/service/UI integration; not an autonomous reviewer or a broad production review console. |
 | Liveness and readiness | Implemented | Liveness reports process state; readiness checks database connectivity. | Supplied local demo reports HTTP 200 for both, database `ok` for readiness. |
-| Frontend | Partial workbench | Next.js screen accepts resource IDs/token, runs grounding, loads/saves responses, and presents review operations. | Not a complete administration/import/export experience. Compose sends `/backend-api/*` requests to `EVIDENCEFORGE_API_URL` (default `http://api:8000`). Hosted-stack connectivity (frontend build/start + PostgreSQL service + same-origin `/backend-api` proxy reachability) is verified by the `Playwright browser smoke` CI job; the Docker image build and Compose container runtime itself still need verification. |
+| Frontend | Partial workbench | Next.js screen accepts resource IDs/token, runs grounding, loads/saves responses, and presents review operations. | Not a complete administration/import/export experience. In the Compose standalone image, `/backend-api/*` is handled by a runtime route that resolves `EVIDENCEFORGE_API_URL` per request (default `http://api:8000`); classic `next start` uses the build-time rewrite. On 2026-10-27, the frontend image was built and an isolated Compose runtime passed five HTTP smoke checks. The existing backend image was reused after source/configuration SHA-256 parity checks; a fresh build of the modified backend Dockerfile remains unverified. |
 | LLM answer generation | Not implemented end to end | Provider-neutral contracts and validation/evaluation scaffolding exist, but no configured production answer-generation request workflow is exposed. | Mock evaluation components are not a shipped generation service. |
 | Export / automatic submission / chatbot | Planned or absent | Not present as completed product capabilities. | Do not infer from design documents. |
 
@@ -220,7 +231,7 @@ Invoke-RestMethod http://localhost:8000/health/live
 Invoke-RestMethod http://localhost:8000/health/ready
 ```
 
-Open `http://localhost:8000/docs` for FastAPI's generated API documentation and `http://localhost:3000` for the web workbench. The frontend currently needs workspace, questionnaire, version, and question identifiers plus a bearer token; it is not a guided onboarding/import UI.
+Open `http://localhost:8000/docs` for FastAPI's generated API documentation and `http://localhost:3000` for the web workbench. The workbench still needs an authorized bearer token, but reviewers can now ask a question in ordinary words and choose from readable, workspace-scoped questionnaire matches. Stable UUIDs remain in application state and API URLs; the collapsed advanced-developer panel is diagnostic only. Production user registration/import onboarding is still not implemented.
 
 ### First-run authentication prerequisite
 
@@ -357,9 +368,11 @@ docker compose --project-name $E2EProject --env-file $E2EEnvFile exec -T api ale
 
 Verify the database and authorized identity before running bootstrap. Run it only once, using the approved local identity and the exact arguments documented in the runbook. Never invent an identity subject, insert token records manually, or expose the one-time bearer token in logs or screenshots.
 
-Open `http://localhost:3000/guided`. Use genuine IDs returned by the API, not placeholder UUIDs. For an end-to-end manual smoke test with synthetic data, verify: (1) authenticate with the authorized local token; (2) import a valid synthetic `.xlsx`; (3) create/upload a synthetic `.md` or `.txt` evidence document; (4) list its versions/chunks and ground an imported question; (5) save a response with an authorized citation; (6) repeat the same update and verify idempotency; (7) change the response and verify the next revision/history; (8) exercise the supported human-review action; and (9) check unauthorized-workspace and invalid-citation rejection. Evidence grounding returns candidates; it is not end-to-end LLM answer generation.
+Open `http://localhost:3000/guided`. For an end-to-end manual smoke test with synthetic data, verify: (1) authenticate with the authorized local token; (2) import a valid synthetic `.xlsx`; (3) create/upload a synthetic `.md` or `.txt` evidence document; (4) in “Ask about your evidence”, type a natural paraphrase of an imported question and press Enter — confirm the readable match, selected question, actual evidence excerpt/source metadata, and “Suggested next question” basis; (5) save a response with an authorized citation; (6) repeat the same update and verify idempotency; (7) change the response and verify the next revision/history; (8) exercise the supported human-review action; and (9) check unauthorized-workspace and invalid-citation rejection. Question matching is deterministic lexical matching of real authorized questions; evidence grounding returns retrieved candidates. Neither is end-to-end LLM answer generation. See [question-first UX](docs/question-first-ux-2026-10-27.md) for the exact flow and limitations.
 
-The repository includes a Playwright smoke-test suite in `frontend/e2e/smoke.spec.ts` (configuration in `frontend/playwright.config.ts`, script `npm run test:e2e`). The three smoke tests pass locally against the isolated test stack and in the hosted `Playwright browser smoke` CI job (PR #25, [run #50](https://github.com/SadashivPole/evidenceforge/actions/runs/40084933365), six of six jobs successful). Their scope is deliberately limited to: guided-page landmark rendering, the root redirect to `/guided`, and same-origin `/backend-api/health/live` proxy reachability through the Next.js rewrite. The broader guided-review workflow — questionnaire import, evidence upload and version inspection, grounding and candidate display, citation selection/validation, response save and identical-save idempotency, revision history, human-review operations, and unauthorized/cross-workspace scenarios — remains not covered by automated browser tests (backend request-harness coverage exists; see `docs/browser-e2e-test-plan.md` §8 for the prioritized backlog).
+The repository includes a Playwright smoke-test suite in `frontend/e2e/smoke.spec.ts` (configuration in `frontend/playwright.config.ts`, script `npm run test:e2e`). Its three frozen smoke checks cover guided-page landmark rendering, the root redirect to `/guided`, and same-origin `/backend-api/health/live` proxy reachability through the Next.js rewrite. The same config now also runs `frontend/e2e/question-first.spec.ts`, which uses synthetic browser-local API responses to exercise natural-language matching, evidence display, suggestions, empty/error states, and workspace scoping without a real database. The original three smoke checks passed locally against the isolated test stack and in the hosted `Playwright browser smoke` CI job for PR #25 ([run #50](https://github.com/SadashivPole/evidenceforge/actions/runs/40084933365)); that hosted baseline does not validate the newer question-first tests.
+
+On top of that frozen smoke suite, the extended **workflow e2e suite** in `frontend/e2e/workflow/` (script `npm run test:workflow`, configuration in `frontend/playwright.workflow.config.ts`) automates the guided-review workflow with real-browser checks per `docs/browser-e2e-test-plan.md` §8: bootstrap-token session connection (bogus token rejected), synthetic XLSX questionnaire import, evidence upload with version/chunk inspection (API-seeded — no UI surface exists today), grounding candidates with per-source metadata, citation selection plus invalid/foreign rejection (exact 422 contract), response save with identical-save no-op and immutable revision history, explicit human-review actions (ACCEPT / EDIT_AND_APPROVE / REJECT with audit-trail proof), role authorization (VIEWER fixtures 403), and unauthorized/cross-workspace masking. The 8.8 authorization spec additionally checks that the question-first UI cannot surface another workspace’s imported question. The suite runs serially against an isolated disposable PostgreSQL database, bootstraps identities only through the documented operator CLI, and uses synthetic fixtures only — see `frontend/e2e/workflow/README.md`. The smoke suite remains untouched and runs in its own config and CI job.
 
 For later sessions, reuse the existing private environment file and preserved test database rather than regenerating credentials:
 
@@ -542,6 +555,10 @@ The corpus/methodology and tests cover retrieval ranking and evidence-state hand
 
 ## Testing and quality checks
 
+### Verified baseline — 2026-10-24/25
+
+Latest verified public baseline: commit [`d0cded2301ec0c3cab3c774d93539f682e225d81`](https://github.com/SadashivPole/evidenceforge/commit/d0cded2301ec0c3cab3c774d93539f682e225d81) (post PR #26), whose [hosted CI run #53](https://github.com/SadashivPole/evidenceforge/actions/runs/40091805488) passed six of six baseline jobs including `Playwright browser smoke`. That baseline result does **not** validate the newer candidate CI jobs. On the 2026-10-27 review tree, locally reproduced checks include full backend `806 passed, 31 skipped`, generation trio `80 passed`, 16/16 backend batches, frontend lint/typecheck/format and both Next builds, browser smoke `3/3`, workflow E2E `9/9`, 37 PostgreSQL-backed tests against isolated local databases, and a host-level standalone runtime/proxy contract. The frontend Docker missing-`public` defect is fixed in source, but the frontend image built successfully and an isolated Compose runtime passed its health and HTTP checks. The backend image was reused because disk space was limited, so its modified Dockerfile still needs a fresh build. The new `playwright-workflow` and `docker-compose-smoke` jobs still require a real hosted Actions run. The opt-in Ollama adapter is disabled by default and is **not wired into a production API/UI generation route**; real-model evaluation is **NOT MEASURED**. See `ARENA_DAY_FINISH_REPORT_2026-10-27.md` and [docker verification](docs/docker-verification-2026-10-24.md).
+
 No tests were executed by the original documentation audit. The project CI file defines Python lint/format/compile/unit tests, a PostgreSQL evidence persistence test, and frontend lint/typecheck/format/build jobs. After publication, the [GitHub Actions CI run for commit `5eacc0fc5cda4ea8436eafabd47b68f154708c9a`](https://github.com/SadashivPole/evidenceforge/actions/runs/38136621746) passed the **Backend**, **Backend PostgreSQL concurrency**, and **Frontend** jobs. That CI result is separate from the audit; run locally and treat your own output as authoritative. To exercise authentication without provisioning the Compose database, use the repository test fixture with the in-memory test app; the generated token remains internal to the test process.
 
 Backend commands from repository root (install with `python -m pip install -e "backend[dev]"` first):
@@ -580,7 +597,7 @@ The repository CI file uses Python 3.12, Node.js 24 LTS, and a PostgreSQL 16 pgv
 | Response update returns 403 | Membership role cannot perform the requested operation. | Confirm role; VIEWER cannot write and only OWNER/ADMIN can set status `APPROVED`. |
 | Response update returns 422 | Status-specific rule, malformed payload, duplicate/foreign/nonexistent citation. | Check request schema and obtain the chunk ID through the same workspace's evidence routes. |
 | XLSX import returns 415/422 | Wrong extension or workbook fails deterministic validation. | Use a synthetic `.xlsx` file and inspect API response; do not rename unrelated formats to `.xlsx`. |
-| Frontend is visible but API actions fail in Compose | The Next.js rewrite reads `EVIDENCEFORGE_API_URL` (Compose default `http://api:8000`). Hosted-stack proxy connectivity is verified by the `Playwright browser smoke` CI job; the Compose image build/runtime still needs verification. | Run `docker compose ps` and `docker compose logs --tail 100 api web`. Test `Invoke-RestMethod http://localhost:8000/health/live` and `Invoke-RestMethod http://localhost:3000/backend-api/health/live`. Inspect browser DevTools Network and only the non-secret API URL value if needed. |
+| Frontend is visible but API actions fail in Compose | In the standalone Compose image, the runtime proxy reads `EVIDENCEFORGE_API_URL` on each request (default `http://api:8000`); classic `next start` uses a build-time rewrite. Candidate Compose runtime connectivity was verified on 2026-10-27 using host ports 18100 and 18101; the earlier hosted baseline Playwright result is separate, and hosted CI for this candidate is still pending. | Run `docker compose ps` and `docker compose logs --tail 100 api web`. Test `Invoke-RestMethod http://localhost:8000/health/live` and `Invoke-RestMethod http://localhost:3000/backend-api/health/live`. Inspect browser DevTools Network and only the non-secret API URL value if needed. |
 | Frontend npm check fails | Wrong Node/npm version, dependencies not installed, or lint/type issues. | Use Node.js 24 LTS as CI does, run `npm ci` in `frontend`, then rerun one script at a time. |
 | PostgreSQL tests fail to connect or vector type is missing | Test DB is unavailable or lacks `vector` extension. | Follow `.github/workflows/ci.yml` service setup; use a separate pgvector test DB and only the test's documented env variable. |
 
@@ -598,7 +615,7 @@ The repository CI file uses Python 3.12, Node.js 24 LTS, and a PostgreSQL 16 pgv
 
 - Frontend is a focused workbench rather than a complete import/admin/reviewer operations suite.
 - Retrieval/embedding behavior depends on the configured environment and vector data; this documentation task did not run the benchmark or suite.
-- The Compose web API rewrite now receives `EVIDENCEFORGE_API_URL` with default `http://api:8000`; runtime connectivity has not yet been verified against a running Compose stack.
+- The Compose standalone web image resolves `EVIDENCEFORGE_API_URL` at request time with default `http://api:8000`; runtime connectivity was verified on 2026-10-27: API liveness/readiness, the guided page, and both frontend proxy health endpoints returned HTTP 200. The backend image was reused rather than freshly built.
 - Generation boundary schemas, mock/evaluation provider modules and related tests are not the same as a connected, end-to-end LLM answer-generation capability.
 
 ### Not implemented as a complete product capability
@@ -610,6 +627,14 @@ The repository CI file uses Python 3.12, Node.js 24 LTS, and a PostgreSQL 16 pgv
 - Production deployment security certification or external audit.
 
 Semantic retrieval and RRF are present in current source; they must not be described as planned/not implemented based on older README text. Their presence does not imply answer generation or proven benchmark quality. Future work should verify reproducibility, failure handling, and deployment configuration before relying on these capabilities.
+
+### 2026-10-27 review prerequisites (explicitly open)
+
+- **Docker image/runtime:** the frontend image built successfully and an isolated Compose stack reached healthy database, API, and web states; all five HTTP smoke checks returned 200. The existing backend image was reused after application/configuration SHA-256 parity checks. A fresh build of the modified backend Dockerfile remains unverified; the candidate `docker-compose-smoke` job still needs a hosted Actions run.
+- **Hosted CI:** `playwright-workflow` and `docker-compose-smoke` are static-reviewed and actionlint-clean, but have no completed GitHub-hosted run for this candidate.
+- **Model-backed generation:** the Ollama adapter has 34 mocked contract tests, but no real Ollama runtime, no real-model evaluation metrics, and no production-facing generate-draft route or UI.
+- **Viewer enrollment:** the workflow test seeds a VIEWER directly in a disposable database because the alpha exposes no membership-enrollment HTTP endpoint. This is a test fixture, not a production authorization feature.
+- **Version-pinned PostgreSQL gates:** tests asserting PostgreSQL 16 / pgvector 0.8.6 remain blocked on the Arena host, which provided PostgreSQL 17 / pgvector 0.8.0.
 
 ## Contributing safely
 

@@ -17,6 +17,16 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://localhost:5432/evidenceforge"
 
+    # Opt-in generation provider (DISABLED by default). Local-only; see
+    # app/questionnaires/generation/local_ollama_provider.py and
+    # docs/llm-generation-decision-2026-10-25.md.
+    generation_provider_enabled: bool = False
+    generation_provider_base_url: str = ""
+    generation_provider_model_id: str = ""
+    generation_provider_timeout_seconds: float = 30.0
+    generation_provider_max_retries: int = 2
+    generation_provider_allow_private_hosts: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

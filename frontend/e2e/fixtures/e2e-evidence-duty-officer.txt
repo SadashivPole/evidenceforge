@@ -1,0 +1,3 @@
+Synthetic EvidenceForge E2E fixture only. The duty officer reviews the alpha
+gate weekly, every Monday before 09:00 UTC, and records the review in the
+security operations log. This document is generated test data.

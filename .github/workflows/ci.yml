@@ -323,7 +323,7 @@ jobs:
           trap cleanup EXIT
 
           api_ready=0
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             if curl --fail --silent --max-time 3 \
               http://127.0.0.1:8000/health/ready >/dev/null; then
               api_ready=1
@@ -345,7 +345,7 @@ jobs:
           fi
 
           web_ready=0
-          for attempt in {1..60}; do
+          for _ in {1..60}; do
             if curl --fail --silent --max-time 3 \
               http://127.0.0.1:3000/guided >/dev/null; then
               web_ready=1
@@ -380,3 +380,198 @@ jobs:
             ${{ runner.temp }}/evidenceforge-web.log
           if-no-files-found: ignore
           retention-days: 7
+
+  playwright-workflow:
+    name: Playwright guided-workflow (8.1-8.8, disposable DB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    env:
+      EF_E2E_TEST_BASE_URL: http://127.0.0.1:3000
+      EF_E2E_TEST_API_URL: http://127.0.0.1:8001
+      EF_E2E_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/ef_e2e_wf
+      EF_E2E_PYTHON: python
+      EF_E2E_API_URL: http://127.0.0.1:8001
+      PLAYWRIGHT_BASE_URL: http://127.0.0.1:3000
+      EVIDENCEFORGE_API_URL: http://127.0.0.1:8001
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/ef_e2e_wf
+      ENVIRONMENT: test
+      HF_HOME: ${{ github.workspace }}/.hf-cache
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ef_e2e_wf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ef_e2e_wf"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install backend dependencies (includes sentence-transformers)
+        run: python -m pip install -q -e "backend[dev]"
+
+      - name: Enable pgvector and migrate disposable workflow database
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ["EF_E2E_DATABASE_URL"])
+          with engine.begin() as connection:
+              connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+          engine.dispose()
+          PY
+          cd backend && python -m alembic upgrade head && cd ..
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Start API and web; run workflow suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_log="$RUNNER_TEMP/ef-wf-api.log"
+          web_log="$RUNNER_TEMP/ef-wf-web.log"
+          (cd backend && exec python -m uvicorn app.main:app --host 127.0.0.1 --port 8001) \
+            > "$api_log" 2>&1 &
+          api_pid=$!
+          (cd frontend && exec npx next start -p 3000 -H 127.0.0.1) \
+            > "$web_log" 2>&1 &
+          web_pid=$!
+          cleanup() { kill "$web_pid" "$api_pid" 2>/dev/null || true; wait "$web_pid" "$api_pid" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for _ in $(seq 1 90); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:8001/health/ready >/dev/null; then break; fi
+            kill -0 "$api_pid" || { cat "$api_log"; exit 1; }
+            sleep 2
+          done
+          curl --fail --silent --max-time 3 http://127.0.0.1:8001/health/ready \
+            | grep -A0 '"database":"ok"' || { echo "API readiness schema mismatch"; exit 1; }
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:3000/guided >/dev/null; then break; fi
+            kill -0 "$web_pid" || { cat "$web_log"; exit 1; }
+            sleep 2
+          done
+          cd frontend
+          npm run test:workflow
+
+      - name: Upload workflow diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-workflow-diagnostics
+          path: |
+            frontend/test-results/
+            ${{ runner.temp }}/ef-wf-api.log
+            ${{ runner.temp }}/ef-wf-web.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker-compose-smoke:
+    name: Docker image and compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: ef-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      CI_PG_PASSWORD: ci-synthetic-not-a-real-secret-${{ github.run_id }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify compose config statically
+        run: |
+          export POSTGRES_PASSWORD="$CI_PG_PASSWORD"
+          export DATABASE_URL="postgresql+psycopg://evidenceforge:${CI_PG_PASSWORD}@db:5432/evidenceforge"
+          docker compose config --quiet && echo "compose config OK"
+
+      - name: Build backend and frontend images
+        run: |
+          docker build -t ef-ci-api:smoke ./backend
+          docker build -t ef-ci-web:smoke ./frontend
+
+      - name: Compose up with unique project and synthetic credentials
+        run: |
+          cat > .env.ci-smoke <<EOF
+          POSTGRES_DB=evidenceforge
+          POSTGRES_USER=evidenceforge
+          POSTGRES_PASSWORD=${CI_PG_PASSWORD}
+          DATABASE_URL=postgresql+psycopg://evidenceforge:${CI_PG_PASSWORD}@db:5432/evidenceforge
+          ENVIRONMENT=test
+          EVIDENCEFORGE_API_URL=http://api:8000
+          EF_API_PORT=18100
+          EF_WEB_PORT=18101
+          EOF
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env.ci-smoke up -d --wait
+
+      - name: Verify API readiness schema, guided page, and proxy
+        run: |
+          set -e
+          curl --fail --silent http://127.0.0.1:18100/health/ready \
+            | grep -E '^\{"status":"ok","database":"ok"\}$' >/dev/null \
+            && echo "API readiness schema OK"
+          curl --fail --silent -o /dev/null http://127.0.0.1:18101/guided && echo "guided OK"
+          curl --fail --silent -o /dev/null http://127.0.0.1:18101/ && echo "root OK"
+          curl --fail --silent http://127.0.0.1:18101/backend-api/health/live \
+            | grep '"status":"ok"' >/dev/null && echo "proxy health OK"
+
+      - name: Negative control (invalid API target must fail)
+        run: |
+          set -euo pipefail
+          neg_container="${COMPOSE_PROJECT_NAME}-neg-web"
+          docker run -d --name "$neg_container" -p 18102:3000 \
+            -e EVIDENCEFORGE_API_URL=http://127.0.0.1:9 ef-ci-web:smoke
+          neg_ready=0
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:18102/guided >/dev/null; then
+              neg_ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$neg_ready" -ne 1 ]; then
+            echo "NEGATIVE CONTROL SETUP FAILED: /guided never became ready"
+            docker logs "$neg_container" || true
+            exit 1
+          fi
+          if curl --fail --silent --max-time 5 http://127.0.0.1:18102/backend-api/health/live; then
+            echo "NEGATIVE CONTROL FAILED: bogus API target returned success"
+            exit 1
+          fi
+          echo "Negative control OK: bogus API target fails as designed"
+          curl --fail --silent -o /dev/null http://127.0.0.1:18102/guided \
+            && echo "bogus-target container still serves /guided (static shell OK)"
+          docker rm -f "$neg_container" >/dev/null
+
+      - name: Tear down only this project's containers (volume preserved)
+        if: always()
+        run: |
+          docker rm -f "${COMPOSE_PROJECT_NAME}-neg-web" >/dev/null 2>&1 || true
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env.ci-smoke stop || true
+          docker compose -p "$COMPOSE_PROJECT_NAME" --env-file .env.ci-smoke rm -f || true
+          rm -f .env.ci-smoke

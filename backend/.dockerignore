@@ -1,3 +1,4 @@
+.git
 .venv
 __pycache__
 .pytest_cache
@@ -5,3 +6,6 @@ __pycache__
 .ruff_cache
 *.pyc
 tests
+dist
+Dockerfile
+.dockerignore
