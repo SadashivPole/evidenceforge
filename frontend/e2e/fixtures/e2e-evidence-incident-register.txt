@@ -1,0 +1,3 @@
+Synthetic EvidenceForge E2E fixture only. The synthetic incident register is
+stored in the GRC shelf of the internal wiki, maintained by the duty officer.
+This document is generated test data.

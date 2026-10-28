@@ -25,3 +25,15 @@ class GenerationOutputLengthError(GenerationBoundaryError):
 
 class GenerationPayloadMalformedError(GenerationBoundaryError):
     """Raised when model output fails structural or schema validation."""
+
+
+class GenerationProviderUnavailableError(GenerationBoundaryError):
+    """Raised when a configured generation provider cannot be reached (timeout, connection, 5xx)."""
+
+
+class GenerationResponseTooLargeError(GenerationBoundaryError):
+    """Raised when the provider responds with a body exceeding the enforced byte ceiling.
+
+    Non-retriable by construction: it is not a connectivity error, so the
+    caller's retry loop never applies it and the payload is never parsed.
+    """

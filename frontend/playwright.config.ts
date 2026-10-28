@@ -3,8 +3,10 @@ import { defineConfig } from "@playwright/test";
 /**
  * Playwright smoke-test configuration for the EvidenceForge frontend.
  *
- * SCOPE: smoke-level checks only (see docs/browser-e2e-test-plan.md). The
- * full guided-review workflow coverage is separate follow-up work.
+ * SCOPE: smoke-level checks plus the isolated, mocked-API question-first UX
+ * contract tests (see docs/browser-e2e-test-plan.md). The extended
+ * guided-review workflow suite lives in e2e/workflow/ under
+ * playwright.workflow.config.ts and is ignored here.
  *
  * This config intentionally does NOT start any servers (no `webServer` hook):
  * nothing here may silently create/stop/delete Compose services or volumes.
@@ -15,6 +17,7 @@ import { defineConfig } from "@playwright/test";
  * guide.
  */
 export default defineConfig({
+  testIgnore: ["e2e/workflow/**"],
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   timeout: 60_000,

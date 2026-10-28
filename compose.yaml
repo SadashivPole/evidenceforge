@@ -21,10 +21,22 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
-      - "8000:8000"
+      - "${EF_API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5); sys.exit(0 if r.status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 180s
 
   web:
     build:
@@ -32,9 +44,24 @@ services:
     environment:
       EVIDENCEFORGE_API_URL: ${EVIDENCEFORGE_API_URL:-http://api:8000}
     ports:
-      - "3000:3000"
+      - "${EF_WEB_PORT:-3000}:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:3000/backend-api/health/ready",
+        ]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 30s
 
 volumes:
   postgres_data:
